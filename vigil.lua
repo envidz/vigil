@@ -115,6 +115,7 @@ local Settings = {
 	item = true,
 	arrows = true,
 	visCheck = false,
+	bodySource = "Auto",
 	aimEnabled = false,
 	aimKey = "MouseButton2",
 	aimMode = "Hold",
@@ -1078,6 +1079,8 @@ switch(espPage, "Glow through walls", "highlight")
 section(espPage, "Filter")
 switch(espPage, "Hide teammates", "teamCheck")
 switch(espPage, "Dim hidden players", "visCheck")
+segmented(espPage, "Follow", "bodySource", { "Auto", "Visible", "Character" })
+note(espPage, "Some games show a different model from a player's real character. Auto follows the visible one when the real one is hidden.")
 slider(espPage, "Max distance", "maxDistance", 100, 5000, 50, function(v) return string.format("%d studs", v) end)
 
 section(espPage, "Style")
@@ -1237,13 +1240,14 @@ do -- repair saved values that no longer fit this executor or the option lists
 	local choices = {
 		silentPart = { Head = true, Torso = true, Closest = true },
 		boxStyle = { Corners = true, Full = true },
+		bodySource = { Auto = true, Visible = true, Character = true },
 		aimMode = { Hold = true, Toggle = true, Always = true },
 		aimPart = { Head = true, Torso = true },
 		aimPriority = { Crosshair = true, Distance = true },
 		aimMethod = { Camera = true, Mouse = canMoveMouse },
 		tracerOrigin = { Bottom = true, Centre = true, Mouse = true },
 	}
-	local defaults = { boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Camera", tracerOrigin = "Bottom" }
+	local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Camera", tracerOrigin = "Bottom" }
 	for key, allowed in pairs(choices) do
 		if not allowed[Settings[key]] then Settings[key] = defaults[key] end
 	end
@@ -1487,10 +1491,155 @@ end
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-local function isVisible(camera, part, char)
-	rayParams.FilterDescendantsInstances = { camera, LocalPlayer.Character, char }
+-- `extra` is the player's real character when they are drawn as a separate model
+local function isVisible(camera, part, char, extra)
+	rayParams.FilterDescendantsInstances = { camera, LocalPlayer.Character, char, extra }
 	local origin = camera.CFrame.Position
 	return workspace:Raycast(origin, part.Position - origin, rayParams) == nil
+end
+
+--------------------------------------------------------------------------------
+-- Visible bodies
+-- Some games keep a player's real Character as an invisible decoy and show a
+-- separate model instead. Every character-like model in the workspace is
+-- tracked, matched to a player, and used whenever the real Character is hidden.
+--------------------------------------------------------------------------------
+
+local bodyModels = {} -- set of character-like models
+local resolvedBody = {} -- player -> visible model
+
+local function considerBody(inst)
+	if inst:IsA("Humanoid") or inst:IsA("AnimationController") or (inst.Name == "Head" and inst:IsA("BasePart")) then
+		local model = inst.Parent
+		if model and model:IsA("Model") then bodyModels[model] = true end
+	end
+end
+for _, inst in ipairs(workspace:GetDescendants()) do considerBody(inst) end
+connect(workspace.DescendantAdded, considerBody)
+
+local function bodyRoot(model)
+	return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("UpperTorso")
+		or model:FindFirstChild("Torso") or model:FindFirstChild("Head")
+end
+
+local function looksHidden(char)
+	if not char:IsDescendantOf(workspace) then return true end
+	local head = char:FindFirstChild("Head")
+	if head and head:IsA("BasePart") then
+		return head.Transparency >= 0.95
+	end
+	for _, part in ipairs(char:GetChildren()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Transparency < 0.95 then
+			return false
+		end
+	end
+	return true
+end
+
+local function ownedBy(model, player)
+	local name = model.Name
+	if name == player.Name or name == player.DisplayName or name == tostring(player.UserId) then return true end
+	for _, value in pairs(model:GetAttributes()) do
+		if value == player.Name or value == player.UserId or value == player.DisplayName then return true end
+	end
+	for _, child in ipairs(model:GetChildren()) do
+		if child:IsA("ObjectValue") and child.Value == player then return true end
+		if (child:IsA("StringValue") and child.Value == player.Name)
+			or (child:IsA("IntValue") and child.Value == player.UserId) then
+			return true
+		end
+	end
+	return false
+end
+
+local function refreshBodies()
+	table.clear(resolvedBody)
+	local camera = workspace.CurrentCamera
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and bodyRoot(myChar)
+
+	local realChars = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then realChars[p.Character] = true end
+	end
+
+	local free = {}
+	for model in pairs(bodyModels) do
+		if not model.Parent then
+			bodyModels[model] = nil
+		elseif not realChars[model] and not (myChar and model:IsDescendantOf(myChar)) then
+			local root = bodyRoot(model)
+			-- skip our own visible body and first-person arms
+			local nearMe = root and ((myRoot and (root.Position - myRoot.Position).Magnitude < 4)
+				or (camera and (root.Position - camera.CFrame.Position).Magnitude < 4))
+			if root and not nearMe then
+				table.insert(free, { model = model, root = root })
+			end
+		end
+	end
+	if #free == 0 then return end
+
+	-- 1) models that name their owner
+	local waiting = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			for _, body in ipairs(free) do
+				if not body.taken and ownedBy(body.model, p) then
+					resolvedBody[p] = body.model
+					body.taken = true
+					break
+				end
+			end
+			if not resolvedBody[p] and p.Character and looksHidden(p.Character) then
+				table.insert(waiting, p)
+			end
+		end
+	end
+
+	-- 2) hidden players left over: pair with the nearest unclaimed model
+	local pairsByDistance = {}
+	for _, p in ipairs(waiting) do
+		local root = bodyRoot(p.Character)
+		for _, body in ipairs(free) do
+			if not body.taken then
+				local d = root and (root.Position - body.root.Position).Magnitude or 0
+				if d < 250 then table.insert(pairsByDistance, { p, body, d }) end
+			end
+		end
+	end
+	table.sort(pairsByDistance, function(a, b) return a[3] < b[3] end)
+	for _, entry in ipairs(pairsByDistance) do
+		local p, body = entry[1], entry[2]
+		if not resolvedBody[p] and not body.taken then
+			resolvedBody[p] = body.model
+			body.taken = true
+		end
+	end
+end
+
+do
+	local elapsed = 1
+	connect(RunService.Heartbeat, function(dt)
+		elapsed += dt
+		if elapsed >= 0.4 then
+			elapsed = 0
+			refreshBodies()
+		end
+	end)
+end
+
+-- Returns the model to draw and aim at, plus the Humanoid that holds health
+local function bodyOf(player)
+	local char = player.Character
+	local body = char
+	if Settings.bodySource ~= "Character" then
+		local alt = resolvedBody[player]
+		if alt and alt.Parent and (Settings.bodySource == "Visible" or not char or looksHidden(char)) then
+			body = alt
+		end
+	end
+	local hum = (char and char:FindFirstChildOfClass("Humanoid")) or (body and body:FindFirstChildOfClass("Humanoid"))
+	return body, hum
 end
 
 local ZERO = Vector3.zero
@@ -1803,9 +1952,8 @@ local function espStep()
 	local baseColour = EspColours[Settings.espColour][2]
 
 	for player, o in pairs(Esp) do
-		local char = player.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head"))
+		local char, hum = bodyOf(player)
+		local root = char and bodyRoot(char)
 		local alive = root ~= nil and (hum == nil or hum.Health > 0)
 
 		if not (Settings.enabled and alive) or (Settings.teamCheck and isTeammate(player)) then
@@ -1819,8 +1967,8 @@ local function espStep()
 		end
 
 		local colour = (Settings.teamColour and player.Team) and player.TeamColor.Color or baseColour
-		local hidden = Settings.visCheck and not isVisible(camera, root, char)
-		local tool = char:FindFirstChildOfClass("Tool")
+		local hidden = Settings.visCheck and not isVisible(camera, root, char, player.Character)
+		local tool = char:FindFirstChildOfClass("Tool") or (player.Character and player.Character:FindFirstChildOfClass("Tool"))
 
 		local glow = hidden and colour:Lerp(HIDDEN_TINT, 0.55) or colour
 		o.highlight.Adornee = char
@@ -1923,9 +2071,8 @@ end
 -- cfg = { part, team, visible, maxDistance, fov, priority }
 -- Returns the best part on this player plus its screen and world distance, or nil
 local function evaluate(player, camera, mouse, cfg)
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then return end
+	local char, hum = bodyOf(player)
+	if not char or (hum and hum.Health <= 0) then return end
 	if cfg.team and isTeammate(player) then return end
 	local camPos = camera.CFrame.Position
 	local best, bestScreen, bestWorld
@@ -1936,7 +2083,7 @@ local function evaluate(player, camera, mouse, cfg)
 			if onScreen then
 				local screenDist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
 				if screenDist <= cfg.fov and (not bestScreen or screenDist < bestScreen)
-					and (not cfg.visible or isVisible(camera, part, char)) then
+					and (not cfg.visible or isVisible(camera, part, char, player.Character)) then
 					best, bestScreen, bestWorld = part, screenDist, worldDist
 				end
 			end
