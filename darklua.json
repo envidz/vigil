@@ -1,0 +1,4 @@
+{
+  "generator": "dense",
+  "rules": ["remove_comments", "remove_spaces", "rename_variables"]
+}

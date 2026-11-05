@@ -348,10 +348,12 @@ local menuGui = new("ScreenGui", {
 --------------------------------------------------------------------------------
 -- Icons (drawn from primitives so they share one outline style and stroke)
 --------------------------------------------------------------------------------
+local iconEye, iconSliders, iconCrosshair, iconTarget, iconSun, iconChevrons, iconClose
+do
 
 local ICON_STROKE = 1.6
 
-local function iconEye()
+function iconEye()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local lid = new("Frame", {
 		Size = UDim2.fromOffset(18, 11), AnchorPoint = Vector2.new(0.5, 0.5),
@@ -365,7 +367,7 @@ local function iconEye()
 	return root, function(c) s.Color = c; pupil.BackgroundColor3 = c end
 end
 
-local function iconSliders()
+function iconSliders()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local parts = {}
 	for i, knobX in ipairs({ 6, 13, 9 }) do
@@ -382,7 +384,7 @@ local function iconSliders()
 	return root, function(c) for _, p in ipairs(parts) do p.BackgroundColor3 = c end end
 end
 
-local function iconCrosshair()
+function iconCrosshair()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local ring = new("Frame", {
 		Size = UDim2.fromOffset(13, 13), AnchorPoint = Vector2.new(0.5, 0.5),
@@ -412,7 +414,7 @@ local function iconCrosshair()
 	end
 end
 
-local function iconTarget()
+function iconTarget()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local strokes = {}
 	for _, size in ipairs({ 17, 9 }) do
@@ -432,7 +434,7 @@ local function iconTarget()
 	end
 end
 
-local function iconSun()
+function iconSun()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local core = new("Frame", {
 		Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0.5, 0.5),
@@ -454,7 +456,7 @@ local function iconSun()
 	end
 end
 
-local function iconChevrons()
+function iconChevrons()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
 	local arms = {}
 	for _, y in ipairs({ 6, 12 }) do
@@ -469,7 +471,7 @@ local function iconChevrons()
 	return root, function(c) for _, a in ipairs(arms) do a.BackgroundColor3 = c end end
 end
 
-local function iconClose()
+function iconClose()
 	local root = new("Frame", { Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1 })
 	local a = new("Frame", {
 		Size = UDim2.fromOffset(14, ICON_STROKE), AnchorPoint = Vector2.new(0.5, 0.5),
@@ -479,6 +481,7 @@ local function iconClose()
 	b.Rotation = -45
 	b.Parent = root
 	return root, function(c) a.BackgroundColor3 = c; b.BackgroundColor3 = c end
+end
 end
 
 --------------------------------------------------------------------------------
@@ -554,6 +557,8 @@ bind(title, "TextColor3", "text")
 --------------------------------------------------------------------------------
 -- Tooltip and toast (floating, so they live outside the window)
 --------------------------------------------------------------------------------
+local hideTip, tooltip, toast
+do
 
 local tip = new("TextLabel", {
 	AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0), Visible = false, ZIndex = 50,
@@ -564,12 +569,12 @@ bind(tip, "TextColor3", "text")
 bind(new("UIStroke", { Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tip }), "Color", "border")
 
 local tipToken = 0
-local function hideTip()
+function hideTip()
 	tipToken += 1
 	tip.Visible = false
 end
 
-local function tooltip(target, text)
+function tooltip(target, text)
 	connect(target.MouseEnter, function()
 		tipToken += 1
 		local mine = tipToken
@@ -613,7 +618,7 @@ bind(toastAction, "TextColor3", "accent")
 
 local toastToken = 0
 local toastCallback
-local function toast(text, actionText, action)
+function toast(text, actionText, action)
 	toastToken += 1
 	local mine = toastToken
 	toastLabel.Text = text
@@ -635,10 +640,13 @@ table.insert(connections, toastAction.Activated:Connect(function()
 	toastCallback = nil
 	if fn then fn() end
 end))
+end
 
 --------------------------------------------------------------------------------
 -- Controls
 --------------------------------------------------------------------------------
+local iconButton, section, row, switchRenders, switch, note, slider, segmented, swatches, keyCapture, consumedInput, aimToggled, keybind, actionButton, buttonRow
+do
 
 local order = 0
 local function nextOrder()
@@ -646,7 +654,7 @@ local function nextOrder()
 	return order
 end
 
-local function iconButton(parent, size, makeIcon, label, idleToken)
+function iconButton(parent, size, makeIcon, label, idleToken)
 	local btn = new("TextButton", {
 		Size = UDim2.fromOffset(size, size), Text = "", AutoButtonColor = false,
 		BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = nextOrder(), Parent = parent,
@@ -668,7 +676,7 @@ local function iconButton(parent, size, makeIcon, label, idleToken)
 	return btn, function(active) state.active = active; render() end
 end
 
-local function section(page, text)
+function section(page, text)
 	local holder = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = nextOrder(), Parent = page,
 	})
@@ -679,7 +687,7 @@ local function section(page, text)
 	}), "TextColor3", "muted")
 end
 
-local function row(page, label)
+function row(page, label)
 	local r = new("Frame", {
 		Size = UDim2.new(1, 0, 0, Tokens.size.row), BackgroundTransparency = 1,
 		LayoutOrder = nextOrder(), Parent = page,
@@ -698,9 +706,9 @@ local function rightAligned(props)
 	return props
 end
 
-local switchRenders = {} -- key -> re-render, so other controls (hotkeys, preview chips) stay in sync
+switchRenders = {} -- key -> re-render, so other controls (hotkeys, preview chips) stay in sync
 
-local function switch(page, label, key, onChange)
+function switch(page, label, key, onChange)
 	local r = row(page, label)
 	local track = new("Frame", rightAligned({ Size = UDim2.fromOffset(40, 22), BorderSizePixel = 0, Parent = r }), { round("full") })
 	local knob = new("Frame", {
@@ -736,7 +744,7 @@ local function switch(page, label, key, onChange)
 	return animated
 end
 
-local function note(page, text)
+function note(page, text)
 	local label = new("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
 		FontFace = Tokens.font, TextSize = Tokens.text.small, TextWrapped = true,
@@ -745,7 +753,7 @@ local function note(page, text)
 	bind(label, "TextColor3", "muted")
 end
 
-local function slider(page, label, key, min, max, step, format)
+function slider(page, label, key, min, max, step, format)
 	local r = row(page, label)
 	local value = new("TextLabel", rightAligned({
 		Size = UDim2.fromOffset(100, 20), BackgroundTransparency = 1, FontFace = Tokens.mono,
@@ -805,7 +813,7 @@ local function slider(page, label, key, min, max, step, format)
 	onTheme(render)
 end
 
-local function segmented(page, label, key, options, onChange)
+function segmented(page, label, key, options, onChange)
 	local r = row(page, label)
 	local holder = new("Frame", rightAligned({
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.control),
@@ -847,7 +855,7 @@ local function segmented(page, label, key, options, onChange)
 	onTheme(render)
 end
 
-local function swatches(page, label, key, colours, onChange)
+function swatches(page, label, key, colours, onChange)
 	local r = row(page, label)
 	local holder = new("Frame", rightAligned({
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 24), BackgroundTransparency = 1, Parent = r,
@@ -889,11 +897,11 @@ local function swatches(page, label, key, colours, onChange)
 	end)
 end
 
-local keyCapture -- set while a keybind control is listening
-local consumedInput -- the press a keybind control captured, so no hotkey also reacts to it
-local aimToggled = false
+-- local keyCapture -- set while a keybind control is listening
+-- local consumedInput -- the press a keybind control captured, so no hotkey also reacts to it
+aimToggled = false
 
-local function keybind(page, label, key, allowMouse)
+function keybind(page, label, key, allowMouse)
 	local r = row(page, label)
 	local btn = new("TextButton", rightAligned({
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.control),
@@ -924,7 +932,7 @@ local function keybind(page, label, key, allowMouse)
 	onTheme(render)
 end
 
-local function actionButton(page, label, text, onClick)
+function actionButton(page, label, text, onClick)
 	local r = row(page, label)
 	local btn = new("TextButton", rightAligned({
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.control),
@@ -942,7 +950,7 @@ local function actionButton(page, label, text, onClick)
 	onTheme(render)
 end
 
-local function buttonRow(page, label, buttons)
+function buttonRow(page, label, buttons)
 	local r = row(page, label)
 	local holder = new("Frame", rightAligned({
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.control),
@@ -970,12 +978,15 @@ local function buttonRow(page, label, buttons)
 		onTheme(render)
 	end
 end
+end
 
 --------------------------------------------------------------------------------
 -- Presets (only touch combat settings; applying one can be undone from the toast)
 --------------------------------------------------------------------------------
+local Presets, applyPreset
+do
 
-local Presets = {
+Presets = {
 	{ "Legit", {
 		aimEnabled = true, aimMode = "Hold", aimPart = "Torso", aimPriority = "Crosshair",
 		fov = 80, showFov = false, smoothing = 8, prediction = 0, visibleOnly = true,
@@ -994,7 +1005,7 @@ local Presets = {
 	} },
 }
 
-local function applyPreset(name, values)
+function applyPreset(name, values)
 	local before = table.clone(Settings)
 	for k, v in pairs(values) do Settings[k] = v end
 	save()
@@ -1004,6 +1015,7 @@ local function applyPreset(name, values)
 		save()
 		applyTheme()
 	end)
+end
 end
 
 --------------------------------------------------------------------------------
@@ -1501,6 +1513,8 @@ end
 --------------------------------------------------------------------------------
 -- Visible bodies
 -- Some games keep a player's real Character as an invisible, server-delayed
+local bodyOf, outline, Esp, removeEsp, espStep
+do
 -- decoy and show a separate model instead. Every character-like model is
 -- tracked, matched to its player a few times a second, and the match is what
 -- ESP, aimbot and silent aim follow. Per frame this is a single table lookup.
@@ -1649,7 +1663,7 @@ do
 end
 
 -- The model to draw and aim at, plus the Humanoid that holds health
-local function bodyOf(player)
+function bodyOf(player)
 	local char = player.Character
 	local body = bodyChoice[player]
 	if not (body and body.Parent) then body = char end
@@ -1785,7 +1799,7 @@ local MAX_BONES = 14
 local HIDDEN_TINT = Color3.fromRGB(110, 110, 120)
 local FILL_FADE = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0.95) })
 
-local function outline(parent)
+function outline(parent)
 	return new("UIStroke", { Thickness = 1, Color = World.outline, Transparency = 0.45, Parent = parent })
 end
 
@@ -2024,7 +2038,7 @@ end
 
 -- Live overlay ---------------------------------------------------------------
 
-local Esp = {}
+Esp = {}
 
 local function createEsp(player)
 	if player == LocalPlayer or Esp[player] then return end
@@ -2036,14 +2050,14 @@ local function createEsp(player)
 	Esp[player] = o
 end
 
-local function removeEsp(player)
+function removeEsp(player)
 	local o = Esp[player]
 	if not o then return end
 	destroyVisual(o)
 	Esp[player] = nil
 end
 
-local function espStep()
+function espStep()
 	local camera = workspace.CurrentCamera
 	if not camera then return end
 	local size = camera.ViewportSize
@@ -2175,12 +2189,15 @@ do
 		}, project, view)
 	end)
 end
+end
 
 --------------------------------------------------------------------------------
 -- Targeting (shared by aimbot and silent aim)
 --------------------------------------------------------------------------------
+local RENDER_STEP, findTarget, circle, placeCircle
+do
 
-local RENDER_STEP = "VigilRender"
+RENDER_STEP = "VigilRender"
 
 local function candidateParts(char, mode)
 	local head = char:FindFirstChild("Head")
@@ -2215,7 +2232,7 @@ local function evaluate(player, camera, mouse, cfg)
 end
 
 -- Keeps `current` while it stays valid, otherwise picks the best player in the field of view
-local function findTarget(camera, mouse, cfg, current)
+function findTarget(camera, mouse, cfg, current)
 	if current and current.Parent then
 		local part = evaluate(current, camera, mouse, cfg)
 		if part then return current, part end
@@ -2235,7 +2252,7 @@ local function findTarget(camera, mouse, cfg, current)
 	return bestPlayer, bestPart
 end
 
-local function circle(filled)
+function circle(filled)
 	local frame = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = World.label,
 		BackgroundTransparency = filled and 0.94 or 1, BorderSizePixel = 0, Visible = false, Parent = espGui,
@@ -2244,7 +2261,7 @@ local function circle(filled)
 	return frame, stroke
 end
 
-local function placeCircle(frame, stroke, visible, centre, radius, locked)
+function placeCircle(frame, stroke, visible, centre, radius, locked)
 	frame.Visible = visible
 	if not visible then return end
 	frame.Position = UDim2.fromOffset(centre.X, centre.Y)
@@ -2254,17 +2271,20 @@ local function placeCircle(frame, stroke, visible, centre, radius, locked)
 	stroke.Color = locked and P.accent or World.label
 	stroke.Transparency = locked and 0 or 0.25
 end
+end
 
 --------------------------------------------------------------------------------
 -- Aimbot
 --------------------------------------------------------------------------------
+local motion, aimStep
+do
 
 local fovCircle, fovStroke = circle(false)
 local currentTarget
 
 -- Velocity measured from on-screen movement. Visible models are often anchored
 -- and moved by the game, so their physics velocity reads zero.
-local motion = setmetatable({}, { __mode = "k" })
+motion = setmetatable({}, { __mode = "k" })
 local function measuredVelocity(part)
 	local now, pos = os.clock(), part.Position
 	local m = motion[part]
@@ -2281,7 +2301,7 @@ local function measuredVelocity(part)
 	return m.vel
 end
 
-local function aimStep(camera, mouse, dt)
+function aimStep(camera, mouse, dt)
 	if Settings.aimMode ~= "Toggle" or not Settings.aimEnabled then aimToggled = false end
 	local active = false
 	if Settings.aimEnabled and not keyCapture and not UserInputService:GetFocusedTextBox() then
@@ -2323,15 +2343,18 @@ local function aimStep(camera, mouse, dt)
 		camera.CFrame = cf:Lerp(CFrame.lookAt(cf.Position, aimPos), alpha)
 	end
 end
+end
 
 --------------------------------------------------------------------------------
 -- Silent aim
 -- Each frame the target is resolved on our own thread; the hooks only read the
+local hookState, silent, silentStep
+do
 -- cached result, and checkcaller() keeps our own raycasts untouched.
 --------------------------------------------------------------------------------
 
-local hookState = { alive = true }
-local silent = { active = false, mouse = Vector2.zero, inset = Vector2.zero }
+hookState = { alive = true }
+silent = { active = false, mouse = Vector2.zero, inset = Vector2.zero }
 
 local silentCircle, silentStroke = circle(true)
 local marker = new("Frame", {
@@ -2340,7 +2363,7 @@ local marker = new("Frame", {
 }, { round("full") })
 local markerStroke = new("UIStroke", { Thickness = 2, Parent = marker })
 
-local function silentStep(camera, mouse)
+function silentStep(camera, mouse)
 	local inset = GuiService:GetGuiInset()
 	silent.mouse, silent.inset = mouse, inset
 
@@ -2450,17 +2473,20 @@ if canHook then
 		return oldIndex(self, key)
 	end))
 end
+end
 
 --------------------------------------------------------------------------------
 -- Visuals
 -- enforce() remembers a property's original value the first time it is
+local enforce, release, releaseAll, visualsStep
+do
 -- overridden; release() puts it back.
 --------------------------------------------------------------------------------
 
 local Lighting = game:GetService("Lighting")
 local saved = setmetatable({}, { __mode = "k" })
 
-local function enforce(inst, prop, value)
+function enforce(inst, prop, value)
 	local s = saved[inst]
 	if not s then
 		s = {}
@@ -2470,7 +2496,7 @@ local function enforce(inst, prop, value)
 	if inst[prop] ~= value then inst[prop] = value end
 end
 
-local function release(inst, prop)
+function release(inst, prop)
 	local s = saved[inst]
 	if s and s[prop] ~= nil then
 		pcall(function() inst[prop] = s[prop] end)
@@ -2478,7 +2504,7 @@ local function release(inst, prop)
 	end
 end
 
-local function releaseAll()
+function releaseAll()
 	for inst, props in pairs(saved) do
 		for prop, value in pairs(props) do
 			pcall(function() inst[prop] = value end)
@@ -2513,7 +2539,7 @@ local crosshairDot = new("Frame", {
 local ARM_DIRECTIONS = { Vector2.new(0, -1), Vector2.new(0, 1), Vector2.new(-1, 0), Vector2.new(1, 0) }
 
 local atmosphereScan = 0
-local function visualsStep(camera, mouse)
+function visualsStep(camera, mouse)
 	override(Settings.fullbright, Lighting, FULLBRIGHT)
 	override(Settings.noFog, Lighting, NO_FOG)
 	-- looking for Atmosphere objects once a second is plenty
@@ -2545,15 +2571,18 @@ local function visualsStep(camera, mouse)
 		release(UserInputService, "MouseIconEnabled")
 	end
 end
+end
 
 --------------------------------------------------------------------------------
 -- Movement
 --------------------------------------------------------------------------------
+local fly, noclipped, localCharacter, stopFly
+do
 
-local fly = {}
-local noclipped = {}
+fly = {}
+noclipped = {}
 
-local function localCharacter()
+function localCharacter()
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -2577,7 +2606,7 @@ local function flyDirection(camera)
 	return dir.Magnitude > 0 and dir.Unit or dir
 end
 
-local function stopFly(hum)
+function stopFly(hum)
 	for _, inst in pairs(fly) do inst:Destroy() end
 	table.clear(fly)
 	if hum then release(hum, "PlatformStand") end
@@ -2679,6 +2708,7 @@ end)
 
 connect(RunService.Stepped, noclipStep)
 connect(RunService.Heartbeat, movementStep)
+end
 
 --------------------------------------------------------------------------------
 -- Per-frame driver, bound after the camera updates
@@ -2697,6 +2727,7 @@ end)
 --------------------------------------------------------------------------------
 -- Active modules (top right)
 --------------------------------------------------------------------------------
+do
 
 local modulesList = new("Frame", {
 	Name = "ActiveModules", AnchorPoint = Vector2.new(1, 0),
@@ -2788,6 +2819,7 @@ connect(RunService.Heartbeat, function(dt)
 		moduleRows[i].frame.Visible = false
 	end
 end)
+end
 
 --------------------------------------------------------------------------------
 -- Lifecycle

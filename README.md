@@ -20,4 +20,4 @@ An error like `CoreGui.12345.67890:1: attempt to call a nil value` means the exe
 
 Right Shift shows or hides the menu (rebindable in Settings). Running it again replaces the running copy.
 
-Edit `src/vigil.lua`, then run `node build.mjs` to regenerate `vigil.lua`. The published copy has comments and indentation stripped because Xeno rejects scripts over about 100 KB.
+Edit `src/vigil.lua`, then run `node build.mjs` to regenerate `vigil.lua`. The published copy has comments and indentation stripped. Keep the main chunk under 200 top-level locals (wrap sections in `do ... end`): Xeno compiles without optimisation and refuses anything over that limit. Check with `luau-compile --binary -O0 vigil.lua`.
