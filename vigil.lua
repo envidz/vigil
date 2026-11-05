@@ -26,7 +26,7 @@ local Tokens = {
 	space = { xs = 4, sm = 8, md = 12, lg = 16 },
 	radius = { sm = 5, md = 7, lg = 10 },
 	text = { body = 15, small = 13, title = 17 },
-	size = { rail = 56, header = 48, row = 40, control = 28, window = Vector2.new(580, 420) },
+	size = { rail = 56, header = 48, row = 40, control = 28, window = Vector2.new(780, 480) },
 	stroke = 1,
 	motion = 0.14,
 	tooltipDelay = 0.4,
@@ -109,6 +109,12 @@ local Settings = {
 	textSize = 14,
 	espColour = 1,
 	tracerOrigin = "Bottom",
+	boxStyle = "Corners",
+	boxFill = false,
+	skeleton = false,
+	item = true,
+	arrows = true,
+	visCheck = false,
 	aimEnabled = false,
 	aimKey = "MouseButton2",
 	aimMode = "Hold",
@@ -691,6 +697,8 @@ local function rightAligned(props)
 	return props
 end
 
+local switchRenders = {} -- key -> re-render, so other controls (hotkeys, preview chips) stay in sync
+
 local function switch(page, label, key, onChange)
 	local r = row(page, label)
 	local track = new("Frame", rightAligned({ Size = UDim2.fromOffset(40, 22), BorderSizePixel = 0, Parent = r }), { round("full") })
@@ -722,7 +730,9 @@ local function switch(page, label, key, onChange)
 		if onChange then onChange(Settings[key]) end
 	end)
 	onTheme(function() render(false) end)
-	return function() render(true) end -- lets hotkeys keep the switch in sync
+	local animated = function() render(true) end
+	switchRenders[key] = animated
+	return animated
 end
 
 local function note(page, text)
@@ -1000,6 +1010,7 @@ end
 --------------------------------------------------------------------------------
 
 local pages, tabSetters = {}, {}
+local tabExtras = {} -- tab id -> extra panel shown only on that tab
 
 local function page(id)
 	local p = new("ScrollingFrame", {
@@ -1031,6 +1042,9 @@ local function selectTab(id)
 		tabSetters[tab.id](tab.id == id)
 		if tab.id == id then title.Text = tab.title end
 	end
+	for tabId, panel in pairs(tabExtras) do
+		panel.Visible = tabId == id
+	end
 	hideTip()
 end
 
@@ -1040,20 +1054,30 @@ for _, tab in ipairs(tabs) do
 	connect(btn.Activated, function() selectTab(tab.id) end)
 end
 
--- ESP page
+-- ESP page: settings list on the left, live preview on the right
+local PANEL_W, PREVIEW_H = 268, 220
+local PREVIEW_W = PANEL_W - 24
+
 local espPage = page("esp")
+espPage.Size = UDim2.new(1, -(PANEL_W + Tokens.space.lg), 1, -Tokens.size.header)
 switch(espPage, "Enabled", "enabled")
 
 section(espPage, "Show")
-switch(espPage, "Boxes", "boxes")
-switch(espPage, "Names", "names")
+switch(espPage, "Box", "boxes")
+segmented(espPage, "Box style", "boxStyle", { "Corners", "Full" })
+switch(espPage, "Box fill", "boxFill")
+switch(espPage, "Name", "names")
 switch(espPage, "Distance", "distance")
+switch(espPage, "Held item", "item")
 switch(espPage, "Health bar", "health")
-switch(espPage, "Tracers", "tracers")
-switch(espPage, "Highlight through walls", "highlight")
+switch(espPage, "Skeleton", "skeleton")
+switch(espPage, "Tracer", "tracers")
+switch(espPage, "Off-screen arrows", "arrows")
+switch(espPage, "Glow through walls", "highlight")
 
 section(espPage, "Filter")
 switch(espPage, "Hide teammates", "teamCheck")
+switch(espPage, "Dim hidden players", "visCheck")
 slider(espPage, "Max distance", "maxDistance", 100, 5000, 50, function(v) return string.format("%d studs", v) end)
 
 section(espPage, "Style")
@@ -1062,6 +1086,149 @@ switch(espPage, "Use team colours", "teamColour")
 segmented(espPage, "Tracer origin", "tracerOrigin", { "Bottom", "Centre", "Mouse" })
 slider(espPage, "Text size", "textSize", 11, 20, 1, function(v) return string.format("%d px", v) end)
 
+local previewUI = { width = PREVIEW_W, height = PREVIEW_H }
+do
+	local panel = new("Frame", {
+		Name = "Preview", AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -Tokens.space.lg, 0, Tokens.size.header),
+		Size = UDim2.new(0, PANEL_W, 1, -(Tokens.size.header + Tokens.space.lg)),
+		BorderSizePixel = 0, Visible = false, Parent = content,
+	}, { round(Tokens.radius.md), padding(Tokens.space.md) })
+	bind(panel, "BackgroundColor3", "surface")
+
+	local stage = new("Frame", {
+		Name = "Stage", Size = UDim2.new(1, 0, 0, PREVIEW_H), BorderSizePixel = 0,
+		ClipsDescendants = true, Parent = panel,
+	}, { round(Tokens.radius.sm) })
+	bind(stage, "BackgroundColor3", "bg")
+	local dropStroke = new("UIStroke", {
+		Thickness = 2, Enabled = false, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = stage,
+	})
+	bind(dropStroke, "Color", "accent")
+
+	local viewport = new("ViewportFrame", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+		Ambient = Color3.fromRGB(130, 130, 140), LightColor = Color3.fromRGB(255, 255, 255),
+		LightDirection = Vector3.new(-1, -1, -1), Parent = stage,
+	})
+	local overlay = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 2, Parent = stage })
+
+	bind(new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 18), Position = UDim2.fromOffset(0, PREVIEW_H + 6),
+		BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = Tokens.text.small,
+		TextXAlignment = Enum.TextXAlignment.Left, Text = "Drag onto the player to add, off to remove", Parent = panel,
+	}), "TextColor3", "muted")
+
+	local tray = new("Frame", {
+		Size = UDim2.new(1, 0, 1, -(PREVIEW_H + 32)), Position = UDim2.fromOffset(0, PREVIEW_H + 32),
+		BackgroundTransparency = 1, Parent = panel,
+	}, {
+		new("UIGridLayout", {
+			CellSize = UDim2.new(1 / 3, -4, 0, 28), CellPadding = UDim2.fromOffset(6, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+
+	local CHIPS = {
+		{ "boxes", "Box" }, { "boxFill", "Fill" }, { "names", "Name" }, { "distance", "Distance" },
+		{ "item", "Item" }, { "health", "Health" }, { "skeleton", "Skeleton" }, { "tracers", "Tracer" },
+		{ "arrows", "Arrow" }, { "highlight", "Glow" },
+	}
+	local chips = {}
+	for i, def in ipairs(CHIPS) do
+		local btn = new("TextButton", {
+			Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i, Parent = tray,
+		}, { round(Tokens.radius.sm) })
+		local dot = new("Frame", {
+			Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
+			BorderSizePixel = 0, Parent = btn,
+		}, { round("full") })
+		local dotStroke = new("UIStroke", { Thickness = 1.5, Parent = dot })
+		local label = new("TextLabel", {
+			Size = UDim2.new(1, -26, 1, 0), Position = UDim2.fromOffset(23, 0), BackgroundTransparency = 1,
+			FontFace = Tokens.font, TextSize = Tokens.text.small, TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd, Text = def[2], Parent = btn,
+		})
+		chips[i] = { key = def[1], btn = btn, dot = dot, dotStroke = dotStroke, label = label }
+	end
+
+	-- on: tinted chip with a filled dot; off: plain chip with a hollow ring
+	function previewUI.renderChips()
+		for _, c in ipairs(chips) do
+			local on = Settings[c.key]
+			c.btn.BackgroundColor3 = on and P.accent or P.raised
+			c.btn.BackgroundTransparency = on and 0.8 or 0
+			c.label.TextColor3 = on and P.text or P.muted
+			c.dot.BackgroundColor3 = P.accent
+			c.dot.BackgroundTransparency = on and 0 or 1
+			c.dotStroke.Color = on and P.accent or P.muted
+		end
+	end
+	onTheme(previewUI.renderChips)
+
+	local function inside(gui, pos)
+		local p, s = gui.AbsolutePosition, gui.AbsoluteSize
+		return pos.X >= p.X and pos.X <= p.X + s.X and pos.Y >= p.Y and pos.Y <= p.Y + s.Y
+	end
+
+	local function setModule(key, value)
+		if Settings[key] == value then return end
+		Settings[key] = value
+		save()
+		if switchRenders[key] then switchRenders[key]() end
+		previewUI.renderChips()
+	end
+
+	-- a press without movement toggles; a drag adds on the player or removes elsewhere
+	local drag
+	for _, c in ipairs(chips) do
+		connect(c.btn.InputBegan, function(input)
+			if isPointer(input) then
+				drag = { chip = c, start = Vector2.new(input.Position.X, input.Position.Y) }
+			end
+		end)
+	end
+	connect(UserInputService.InputChanged, function(input)
+		if not drag then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		local pos = Vector2.new(input.Position.X, input.Position.Y)
+		if not drag.ghost then
+			if (pos - drag.start).Magnitude < 5 then return end
+			local ghost = drag.chip.btn:Clone()
+			ghost.Size = UDim2.fromOffset(drag.chip.btn.AbsoluteSize.X, drag.chip.btn.AbsoluteSize.Y)
+			ghost.AnchorPoint = Vector2.new(0.5, 0.5)
+			ghost.ZIndex = 80
+			ghost.Active = false
+			ghost.Parent = menuGui
+			drag.ghost = ghost
+		end
+		drag.ghost.Position = UDim2.fromOffset(pos.X, pos.Y)
+		dropStroke.Enabled = inside(stage, pos)
+	end)
+	connect(UserInputService.InputEnded, function(input)
+		if not drag or not isPointer(input) then return end
+		local d = drag
+		drag = nil
+		dropStroke.Enabled = false
+		local key = d.chip.key
+		if d.ghost then
+			d.ghost:Destroy()
+			if inside(stage, Vector2.new(input.Position.X, input.Position.Y)) then
+				setModule(key, true)
+			elseif Settings[key] then
+				setModule(key, false)
+			end
+		else
+			setModule(key, not Settings[key])
+		end
+	end)
+
+	previewUI.panel = panel
+	previewUI.viewport = viewport
+	previewUI.overlay = overlay
+	tabExtras.esp = panel
+end
+
 -- Aimbot page
 local canMoveMouse = typeof(mousemoverel) == "function"
 local canHook = typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function"
@@ -1069,13 +1236,14 @@ local canHook = typeof(hookmetamethod) == "function" and typeof(getnamecallmetho
 do -- repair saved values that no longer fit this executor or the option lists
 	local choices = {
 		silentPart = { Head = true, Torso = true, Closest = true },
+		boxStyle = { Corners = true, Full = true },
 		aimMode = { Hold = true, Toggle = true, Always = true },
 		aimPart = { Head = true, Torso = true },
 		aimPriority = { Crosshair = true, Distance = true },
 		aimMethod = { Camera = true, Mouse = canMoveMouse },
 		tracerOrigin = { Bottom = true, Centre = true, Mouse = true },
 	}
-	local defaults = { silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Camera", tracerOrigin = "Bottom" }
+	local defaults = { boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Camera", tracerOrigin = "Bottom" }
 	for key, allowed in pairs(choices) do
 		if not allowed[Settings[key]] then Settings[key] = defaults[key] end
 	end
@@ -1289,178 +1457,32 @@ end
 
 --------------------------------------------------------------------------------
 -- ESP
+-- One renderer draws both the live overlay and the menu preview, so the
+-- preview always matches what you see in game.
 --------------------------------------------------------------------------------
 
-local Esp = {}
-
-local function createEsp(player)
-	if player == LocalPlayer or Esp[player] then return end
-	local o = {}
-	o.box = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, Parent = espGui })
-	new("UIStroke", { Thickness = 3, Color = World.outline, Transparency = 0.5, Parent = o.box })
-	local inner = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = o.box })
-	o.boxStroke = new("UIStroke", { Thickness = 1, Parent = inner })
-
-	o.name = new("TextLabel", {
-		AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(260, 20), BackgroundTransparency = 1,
-		FontFace = Tokens.fontStrong, TextColor3 = World.label, TextStrokeTransparency = 0.45,
-		TextYAlignment = Enum.TextYAlignment.Bottom, Visible = false, Parent = espGui,
-	})
-	o.dist = new("TextLabel", {
-		AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(160, 18), BackgroundTransparency = 1,
-		FontFace = Tokens.mono, TextColor3 = World.labelMuted, TextStrokeTransparency = 0.45,
-		TextYAlignment = Enum.TextYAlignment.Top, Visible = false, Parent = espGui,
-	})
-	o.hpBg = new("Frame", {
-		BackgroundColor3 = World.outline, BackgroundTransparency = 0.4, BorderSizePixel = 0,
-		Visible = false, Parent = espGui,
-	})
-	o.hp = new("Frame", {
-		AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), BorderSizePixel = 0, Parent = o.hpBg,
-	})
-	o.tracer = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Visible = false, Parent = espGui,
-	})
-	o.highlight = new("Highlight", {
-		FillTransparency = 0.7, OutlineTransparency = 0.1, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-		Enabled = false, Parent = highlightFolder,
-	})
-	Esp[player] = o
-end
-
-local function removeEsp(player)
-	local o = Esp[player]
-	if not o then return end
-	for _, inst in pairs(o) do
-		if typeof(inst) == "Instance" then inst:Destroy() end
-	end
-	Esp[player] = nil
-end
-
-local function hide(o)
-	o.box.Visible = false
-	o.name.Visible = false
-	o.dist.Visible = false
-	o.hpBg.Visible = false
-	o.tracer.Visible = false
-	o.highlight.Enabled = false
-end
-
-local function drawLine(frame, a, b)
-	local d = b - a
-	frame.Size = UDim2.fromOffset(d.Magnitude, 1.5)
-	frame.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
-	frame.Rotation = math.deg(math.atan2(d.Y, d.X))
-end
-
-local function isTeammate(player)
-	return LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team and not player.Neutral
-end
-
-local function step()
-	local camera = workspace.CurrentCamera
-	if not camera then return end
-	local viewport = camera.ViewportSize
-	local camPos = camera.CFrame.Position
-	local baseColour = EspColours[Settings.espColour][2]
-
-	for player, o in pairs(Esp) do
-		local char = player.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
-
-		if not (Settings.enabled and hum and root and hum.Health > 0) or (Settings.teamCheck and isTeammate(player)) then
-			hide(o)
-			continue
-		end
-
-		local distance = (camPos - root.Position).Magnitude
-		if distance > Settings.maxDistance then
-			hide(o)
-			continue
-		end
-
-		local colour = (Settings.teamColour and player.Team) and player.TeamColor.Color or baseColour
-
-		o.highlight.Adornee = char
-		o.highlight.FillColor = colour
-		o.highlight.OutlineColor = colour
-		o.highlight.Enabled = Settings.highlight
-
-		local head = char:FindFirstChild("Head")
-		local legs = hum.RigType == Enum.HumanoidRigType.R6 and 3 or (hum.HipHeight + root.Size.Y / 2)
-		local topWorld = head and (head.Position + Vector3.new(0, head.Size.Y / 2 + 0.3, 0)) or (root.Position + Vector3.new(0, 3, 0))
-		local bottomWorld = root.Position - Vector3.new(0, legs + 0.2, 0)
-		local top = camera:WorldToViewportPoint(topWorld)
-		local bottom = camera:WorldToViewportPoint(bottomWorld)
-
-		if top.Z <= 0 or bottom.Z <= 0 then
-			o.box.Visible, o.name.Visible, o.dist.Visible, o.hpBg.Visible, o.tracer.Visible = false, false, false, false, false
-			continue
-		end
-
-		local h = math.max(math.abs(bottom.Y - top.Y), 6)
-		local w = math.max(h * 0.55, 4)
-		local cx = (top.X + bottom.X) / 2
-		local left = math.floor(cx - w / 2)
-		local y = math.floor(math.min(top.Y, bottom.Y))
-
-		o.box.Visible = Settings.boxes
-		if Settings.boxes then
-			o.box.Position = UDim2.fromOffset(left, y)
-			o.box.Size = UDim2.fromOffset(math.floor(w), math.floor(h))
-			o.boxStroke.Color = colour
-		end
-
-		o.name.Visible = Settings.names
-		if Settings.names then
-			o.name.Text = player.DisplayName
-			o.name.TextSize = Settings.textSize + 1
-			o.name.Position = UDim2.fromOffset(cx, y - 3)
-		end
-
-		o.dist.Visible = Settings.distance
-		if Settings.distance then
-			o.dist.Text = string.format("%d studs", math.floor(distance))
-			o.dist.TextSize = Settings.textSize - 1
-			o.dist.Position = UDim2.fromOffset(cx, y + h + 3)
-		end
-
-		o.hpBg.Visible = Settings.health
-		if Settings.health then
-			local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-			o.hpBg.Position = UDim2.fromOffset(left - 7, y - 1)
-			o.hpBg.Size = UDim2.fromOffset(4, math.floor(h) + 2)
-			o.hp.Size = UDim2.fromScale(1, ratio)
-			o.hp.BackgroundColor3 = World.healthLow:Lerp(World.healthHigh, ratio)
-		end
-
-		o.tracer.Visible = Settings.tracers
-		if Settings.tracers then
-			local from
-			if Settings.tracerOrigin == "Centre" then
-				from = viewport / 2
-			elseif Settings.tracerOrigin == "Mouse" then
-				from = UserInputService:GetMouseLocation()
-			else
-				from = Vector2.new(viewport.X / 2, viewport.Y)
+local teamCache = { at = -1, split = false }
+local function teamsSplit()
+	local now = os.clock()
+	if now - teamCache.at > 0.5 then
+		teamCache.at = now
+		teamCache.split = false
+		local myTeam = LocalPlayer.Team
+		for _, other in ipairs(Players:GetPlayers()) do
+			if other.Team ~= myTeam then
+				teamCache.split = true
+				break
 			end
-			drawLine(o.tracer, from, Vector2.new(cx, y + h))
-			o.tracer.BackgroundColor3 = colour
 		end
 	end
+	return teamCache.split
 end
 
-for _, player in ipairs(Players:GetPlayers()) do createEsp(player) end
-connect(Players.PlayerAdded, createEsp)
-connect(Players.PlayerRemoving, removeEsp)
-connect(RunService.RenderStepped, step)
-
---------------------------------------------------------------------------------
--- Targeting (shared by aimbot and silent aim)
---------------------------------------------------------------------------------
-
-local RENDER_STEP = "VigilRender"
+-- Many games put everyone on one team; that must not count as "all teammates"
+local function isTeammate(player)
+	local myTeam = LocalPlayer.Team
+	return myTeam ~= nil and player.Team == myTeam and not player.Neutral and teamsSplit()
+end
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1470,6 +1492,425 @@ local function isVisible(camera, part, char)
 	local origin = camera.CFrame.Position
 	return workspace:Raycast(origin, part.Position - origin, rayParams) == nil
 end
+
+local ZERO = Vector3.zero
+local SKELETON_R15 = {
+	{ "Head", ZERO, "UpperTorso", ZERO }, { "UpperTorso", ZERO, "LowerTorso", ZERO },
+	{ "UpperTorso", ZERO, "LeftUpperArm", ZERO }, { "LeftUpperArm", ZERO, "LeftLowerArm", ZERO },
+	{ "LeftLowerArm", ZERO, "LeftHand", ZERO }, { "UpperTorso", ZERO, "RightUpperArm", ZERO },
+	{ "RightUpperArm", ZERO, "RightLowerArm", ZERO }, { "RightLowerArm", ZERO, "RightHand", ZERO },
+	{ "LowerTorso", ZERO, "LeftUpperLeg", ZERO }, { "LeftUpperLeg", ZERO, "LeftLowerLeg", ZERO },
+	{ "LeftLowerLeg", ZERO, "LeftFoot", ZERO }, { "LowerTorso", ZERO, "RightUpperLeg", ZERO },
+	{ "RightUpperLeg", ZERO, "RightLowerLeg", ZERO }, { "RightLowerLeg", ZERO, "RightFoot", ZERO },
+}
+local NECK, HIP = Vector3.new(0, 1, 0), Vector3.new(0, -1, 0)
+local LIMB_TOP, LIMB_END = Vector3.new(0, 0.9, 0), Vector3.new(0, -0.9, 0)
+local SKELETON_R6 = {
+	{ "Head", ZERO, "Torso", NECK }, { "Torso", NECK, "Torso", HIP },
+	{ "Torso", NECK, "Left Arm", LIMB_TOP }, { "Left Arm", LIMB_TOP, "Left Arm", LIMB_END },
+	{ "Torso", NECK, "Right Arm", LIMB_TOP }, { "Right Arm", LIMB_TOP, "Right Arm", LIMB_END },
+	{ "Torso", HIP, "Left Leg", LIMB_TOP }, { "Left Leg", LIMB_TOP, "Left Leg", LIMB_END },
+	{ "Torso", HIP, "Right Leg", LIMB_TOP }, { "Right Leg", LIMB_TOP, "Right Leg", LIMB_END },
+}
+local MAX_BONES = 14
+local HIDDEN_TINT = Color3.fromRGB(110, 110, 120)
+local FILL_FADE = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0.95) })
+
+local function outline(parent)
+	return new("UIStroke", { Thickness = 1, Color = World.outline, Transparency = 0.45, Parent = parent })
+end
+
+local function line(parent)
+	local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Visible = false, Parent = parent })
+	outline(f)
+	return f
+end
+
+local function setLine(frame, a, b, thickness)
+	local d = b - a
+	frame.Size = UDim2.fromOffset(d.Magnitude, thickness)
+	frame.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+	frame.Rotation = math.deg(math.atan2(d.Y, d.X))
+end
+
+local function createVisual(parent)
+	local o = { corners = {}, bones = {}, arrowParts = {} }
+	o.fill = new("Frame", { BorderSizePixel = 0, Visible = false, Parent = parent }, {
+		new("UIGradient", { Rotation = 90, Transparency = FILL_FADE }),
+	})
+	o.box = new("Frame", { BackgroundTransparency = 1, Visible = false, Parent = parent })
+	new("UIStroke", { Thickness = 3, Color = World.outline, Transparency = 0.5, Parent = o.box })
+	local inner = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = o.box })
+	o.boxStroke = new("UIStroke", { Thickness = 1, Parent = inner })
+	for i = 1, 8 do
+		o.corners[i] = new("Frame", { BorderSizePixel = 0, Visible = false, Parent = parent })
+		outline(o.corners[i])
+	end
+	for i = 1, MAX_BONES do o.bones[i] = line(parent) end
+	o.tracer = line(parent)
+	o.name = new("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(260, 20), BackgroundTransparency = 1,
+		FontFace = Tokens.fontStrong, TextColor3 = World.label, TextStrokeTransparency = 0.45,
+		TextYAlignment = Enum.TextYAlignment.Bottom, Visible = false, Parent = parent,
+	})
+	o.info = new("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(260, 18), BackgroundTransparency = 1,
+		FontFace = Tokens.mono, TextColor3 = World.labelMuted, TextStrokeTransparency = 0.45,
+		TextYAlignment = Enum.TextYAlignment.Top, Visible = false, Parent = parent,
+	})
+	o.hpBg = new("Frame", {
+		BackgroundColor3 = World.outline, BackgroundTransparency = 0.35, BorderSizePixel = 0,
+		Visible = false, Parent = parent,
+	})
+	o.hp = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), BorderSizePixel = 0, Parent = o.hpBg })
+	o.hpText = new("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5), Size = UDim2.fromOffset(40, 14), BackgroundTransparency = 1,
+		FontFace = Tokens.mono, TextColor3 = World.label, TextStrokeTransparency = 0.45,
+		TextXAlignment = Enum.TextXAlignment.Right, Visible = false, Parent = parent,
+	})
+	-- chevron pointing right; the container rotates toward the player
+	o.arrow = new("Frame", {
+		Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1, Visible = false, Parent = parent,
+	})
+	for _, spec in ipairs({ { 5, 31 }, { 11, -31 } }) do
+		local f = new("Frame", {
+			Size = UDim2.fromOffset(11, 2.5), AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(8, spec[1]), Rotation = spec[2], BorderSizePixel = 0, Parent = o.arrow,
+		})
+		outline(f)
+		table.insert(o.arrowParts, f)
+	end
+	return o
+end
+
+local function hideBody(o)
+	o.fill.Visible = false
+	o.box.Visible = false
+	o.tracer.Visible = false
+	o.name.Visible = false
+	o.info.Visible = false
+	o.hpBg.Visible = false
+	o.hpText.Visible = false
+	for _, f in ipairs(o.corners) do f.Visible = false end
+	for _, f in ipairs(o.bones) do f.Visible = false end
+end
+
+local function hideVisual(o)
+	hideBody(o)
+	o.arrow.Visible = false
+	if o.highlight then o.highlight.Enabled = false end
+end
+
+local function destroyVisual(o)
+	for _, v in pairs(o) do
+		if typeof(v) == "Instance" then
+			v:Destroy()
+		elseif type(v) == "table" then
+			for _, x in ipairs(v) do
+				if typeof(x) == "Instance" then x:Destroy() end
+			end
+		end
+	end
+end
+
+-- t = { char, root, colour, hidden, name, distance, item, health (0-1), healthValue }
+-- project(worldPos) -> screenPos, depth; view = { size, tracerFrom, preview }
+local function renderVisual(o, t, project, view)
+	local char, root = t.char, t.root
+
+	local topY, bottomY = -math.huge, math.huge
+	for _, part in ipairs(char:GetChildren()) do
+		if part:IsA("BasePart") then
+			local half, y = part.Size.Y / 2, part.Position.Y
+			if y + half > topY then topY = y + half end
+			if y - half < bottomY then bottomY = y - half end
+		end
+	end
+	local rp = root.Position
+	local top, zTop = project(Vector3.new(rp.X, topY + 0.15, rp.Z))
+	local bottom, zBottom = project(Vector3.new(rp.X, bottomY - 0.1, rp.Z))
+	local size = view.size
+	local cx = (top.X + bottom.X) / 2
+	local offscreen = zTop <= 0 or zBottom <= 0 or cx < 0 or cx > size.X or bottom.Y < 0 or top.Y > size.Y
+
+	local colour = t.hidden and t.colour:Lerp(HIDDEN_TINT, 0.55) or t.colour
+
+	local showArrow = Settings.arrows and (offscreen or view.preview == true)
+	o.arrow.Visible = showArrow
+	if showArrow then
+		local pos, angle
+		if view.preview then
+			pos, angle = Vector2.new(size.X - 14, size.Y / 2), 0
+		else
+			local centre = size / 2
+			local dir = (top + bottom) / 2 - centre
+			if zTop <= 0 then dir = -dir end
+			if dir.Magnitude < 1 then dir = Vector2.new(0, 1) end
+			dir = dir.Unit
+			local radius = math.min(math.min(size.X, size.Y) / 2 - 48, 220)
+			pos, angle = centre + dir * radius, math.deg(math.atan2(dir.Y, dir.X))
+		end
+		o.arrow.Position = UDim2.fromOffset(pos.X, pos.Y)
+		o.arrow.Rotation = angle
+		for _, f in ipairs(o.arrowParts) do f.BackgroundColor3 = colour end
+	end
+
+	if offscreen then
+		hideBody(o)
+		return
+	end
+
+	local h = math.floor(math.max(bottom.Y - top.Y, 6))
+	local w = math.floor(math.max(h * 0.55, 4))
+	local left, y = math.floor(cx - w / 2), math.floor(top.Y)
+	local right, base = left + w, y + h
+
+	o.fill.Visible = Settings.boxFill
+	if Settings.boxFill then
+		o.fill.Position = UDim2.fromOffset(left, y)
+		o.fill.Size = UDim2.fromOffset(w, h)
+		o.fill.BackgroundColor3 = colour
+	end
+
+	local full = Settings.boxes and Settings.boxStyle == "Full"
+	o.box.Visible = full
+	if full then
+		o.box.Position = UDim2.fromOffset(left, y)
+		o.box.Size = UDim2.fromOffset(w, h)
+		o.boxStroke.Color = colour
+	end
+
+	if Settings.boxes and Settings.boxStyle == "Corners" then
+		local len, th = math.max(math.floor(math.min(w, h) * 0.28), 4), 2
+		local spec = {
+			{ left, y, len, th }, { left, y, th, len },
+			{ right - len, y, len, th }, { right - th, y, th, len },
+			{ left, base - th, len, th }, { left, base - len, th, len },
+			{ right - len, base - th, len, th }, { right - th, base - len, th, len },
+		}
+		for i, f in ipairs(o.corners) do
+			local s = spec[i]
+			f.Position = UDim2.fromOffset(s[1], s[2])
+			f.Size = UDim2.fromOffset(s[3], s[4])
+			f.BackgroundColor3 = colour
+			f.Visible = true
+		end
+	else
+		for _, f in ipairs(o.corners) do f.Visible = false end
+	end
+
+	o.name.Visible = Settings.names
+	if Settings.names then
+		o.name.Text = t.name
+		o.name.TextSize = Settings.textSize + 1
+		o.name.Position = UDim2.fromOffset(cx, y - 4)
+	end
+
+	local info = {}
+	if Settings.distance then table.insert(info, string.format("%d studs", math.floor(t.distance))) end
+	if Settings.item and t.item then table.insert(info, t.item) end
+	o.info.Visible = #info > 0
+	if #info > 0 then
+		o.info.Text = table.concat(info, "  ·  ")
+		o.info.TextSize = math.max(Settings.textSize - 1, 11)
+		o.info.Position = UDim2.fromOffset(cx, base + 4)
+	end
+
+	local showHealth = Settings.health and t.health ~= nil
+	o.hpBg.Visible = showHealth
+	o.hpText.Visible = showHealth and t.health < 0.995
+	if showHealth then
+		local ratio = t.health
+		o.hpBg.Position = UDim2.fromOffset(left - 7, y - 1)
+		o.hpBg.Size = UDim2.fromOffset(4, h + 2)
+		o.hp.Size = UDim2.fromScale(1, ratio)
+		o.hp.BackgroundColor3 = World.healthLow:Lerp(World.healthHigh, ratio)
+		if o.hpText.Visible then
+			o.hpText.Text = tostring(t.healthValue)
+			o.hpText.TextSize = math.max(Settings.textSize - 2, 11)
+			o.hpText.Position = UDim2.fromOffset(left - 11, y + h * (1 - ratio))
+		end
+	end
+
+	o.tracer.Visible = Settings.tracers
+	if Settings.tracers then
+		setLine(o.tracer, view.tracerFrom, Vector2.new(cx, base), 1.5)
+		o.tracer.BackgroundColor3 = colour
+	end
+
+	local used = 0
+	if Settings.skeleton then
+		local bones = char:FindFirstChild("UpperTorso") and SKELETON_R15 or SKELETON_R6
+		for _, b in ipairs(bones) do
+			local pa, pb = char:FindFirstChild(b[1]), char:FindFirstChild(b[3])
+			if pa and pb and pa:IsA("BasePart") and pb:IsA("BasePart") then
+				local a, za = project(pa.CFrame * b[2])
+				local c, zc = project(pb.CFrame * b[4])
+				if za > 0 and zc > 0 and used < MAX_BONES then
+					used += 1
+					local f = o.bones[used]
+					setLine(f, a, c, 1.5)
+					f.BackgroundColor3 = colour
+					f.Visible = true
+				end
+			end
+		end
+	end
+	for i = used + 1, MAX_BONES do o.bones[i].Visible = false end
+end
+
+-- Live overlay ---------------------------------------------------------------
+
+local Esp = {}
+
+local function createEsp(player)
+	if player == LocalPlayer or Esp[player] then return end
+	local o = createVisual(espGui)
+	o.highlight = new("Highlight", {
+		FillTransparency = 0.75, OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+		Enabled = false, Parent = highlightFolder,
+	})
+	Esp[player] = o
+end
+
+local function removeEsp(player)
+	local o = Esp[player]
+	if not o then return end
+	destroyVisual(o)
+	Esp[player] = nil
+end
+
+local function espStep()
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	local size = camera.ViewportSize
+	local camPos = camera.CFrame.Position
+	local function project(p)
+		local v = camera:WorldToViewportPoint(p)
+		return Vector2.new(v.X, v.Y), v.Z
+	end
+
+	local from
+	if Settings.tracerOrigin == "Centre" then
+		from = size / 2
+	elseif Settings.tracerOrigin == "Mouse" then
+		from = UserInputService:GetMouseLocation()
+	else
+		from = Vector2.new(size.X / 2, size.Y)
+	end
+	local view = { size = size, tracerFrom = from }
+	local baseColour = EspColours[Settings.espColour][2]
+
+	for player, o in pairs(Esp) do
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head"))
+		local alive = root ~= nil and (hum == nil or hum.Health > 0)
+
+		if not (Settings.enabled and alive) or (Settings.teamCheck and isTeammate(player)) then
+			hideVisual(o)
+			continue
+		end
+		local distance = (camPos - root.Position).Magnitude
+		if distance > Settings.maxDistance then
+			hideVisual(o)
+			continue
+		end
+
+		local colour = (Settings.teamColour and player.Team) and player.TeamColor.Color or baseColour
+		local hidden = Settings.visCheck and not isVisible(camera, root, char)
+		local tool = char:FindFirstChildOfClass("Tool")
+
+		local glow = hidden and colour:Lerp(HIDDEN_TINT, 0.55) or colour
+		o.highlight.Adornee = char
+		o.highlight.FillColor = glow
+		o.highlight.OutlineColor = glow
+		o.highlight.Enabled = Settings.highlight
+
+		renderVisual(o, {
+			char = char, root = root, colour = colour, hidden = hidden,
+			name = player.DisplayName, distance = distance, item = tool and tool.Name,
+			health = hum and math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1),
+			healthValue = hum and math.floor(hum.Health + 0.5),
+		}, project, view)
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do createEsp(player) end
+connect(Players.PlayerAdded, createEsp)
+connect(Players.PlayerRemoving, removeEsp)
+connect(RunService.RenderStepped, espStep)
+
+-- Menu preview -----------------------------------------------------------------
+
+do
+	local vf = previewUI.viewport
+	local W, H = previewUI.width, previewUI.height
+	local DUMMY = Color3.fromRGB(150, 150, 160)
+
+	local cam = new("Camera", { FieldOfView = 38, Parent = vf })
+	cam.CFrame = CFrame.lookAt(Vector3.new(0, 0.3, 13), Vector3.new(0, -0.5, 0))
+	vf.CurrentCamera = cam
+
+	local model = new("Model", { Name = "TestPlayer" })
+	local tinted = {}
+	local function part(name, size, pos)
+		local p = new("Part", {
+			Name = name, Size = size, CFrame = CFrame.new(pos), Anchored = true, CanCollide = false,
+			Material = Enum.Material.SmoothPlastic, Color = DUMMY, TopSurface = Enum.SurfaceType.Smooth,
+			BottomSurface = Enum.SurfaceType.Smooth, Parent = model,
+		})
+		table.insert(tinted, p)
+		return p
+	end
+	local root = part("HumanoidRootPart", Vector3.new(2, 2, 1), Vector3.zero)
+	root.Transparency = 1
+	table.remove(tinted)
+	part("Torso", Vector3.new(2, 2, 1), Vector3.zero)
+	local head = part("Head", Vector3.new(2, 1, 1), Vector3.new(0, 1.5, 0))
+	new("SpecialMesh", { MeshType = Enum.MeshType.Head, Scale = Vector3.new(1.25, 1.25, 1.25), Parent = head })
+	part("Left Arm", Vector3.new(1, 2, 1), Vector3.new(-1.5, 0, 0))
+	part("Right Arm", Vector3.new(1, 2, 1), Vector3.new(1.5, 0, 0))
+	part("Left Leg", Vector3.new(1, 2, 1), Vector3.new(-0.5, -2, 0))
+	part("Right Leg", Vector3.new(1, 2, 1), Vector3.new(0.5, -2, 0))
+	model.PrimaryPart = root
+	model.Parent = vf
+
+	local o = createVisual(previewUI.overlay)
+	local view = { size = Vector2.new(W, H), tracerFrom = Vector2.new(W / 2, H), preview = true }
+	local tanY = math.tan(math.rad(cam.FieldOfView) / 2)
+	local function project(p)
+		local rel = cam.CFrame:PointToObjectSpace(p)
+		local z = -rel.Z
+		if z <= 0.01 then return Vector2.zero, -1 end
+		local x = rel.X / z / (tanY * W / H)
+		local y = rel.Y / z / tanY
+		return Vector2.new((x + 1) / 2 * W, (1 - y) / 2 * H), z
+	end
+
+	local angle = 0.5
+	connect(RunService.RenderStepped, function(dt)
+		if not (Holder.Visible and previewUI.panel.Visible) then return end
+		previewUI.renderChips()
+		if not reducedMotion then angle = (angle + dt * 0.5) % (math.pi * 2) end
+		model:PivotTo(CFrame.Angles(0, angle, 0))
+		local colour = EspColours[Settings.espColour][2]
+		for _, p in ipairs(tinted) do
+			p.Color = Settings.highlight and DUMMY:Lerp(colour, 0.6) or DUMMY
+		end
+		renderVisual(o, {
+			char = model, root = root, colour = colour, hidden = false, name = "Test player",
+			distance = 48, item = "Pistol", health = 0.72, healthValue = 72,
+		}, project, view)
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- Targeting (shared by aimbot and silent aim)
+--------------------------------------------------------------------------------
+
+local RENDER_STEP = "VigilRender"
 
 local function candidateParts(char, mode)
 	local head = char:FindFirstChild("Head")
