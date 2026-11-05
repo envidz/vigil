@@ -122,7 +122,7 @@ local Settings = {
 	aimPart = "Head",
 	aimPriority = "Crosshair",
 	aimTeamCheck = true,
-	visibleOnly = true,
+	visibleOnly = false,
 	stickyTarget = true,
 	aimMaxDistance = 1000,
 	fov = 120,
@@ -134,7 +134,7 @@ local Settings = {
 	silentPart = "Head",
 	hitChance = 100,
 	silentTeamCheck = true,
-	silentVisibleOnly = true,
+	silentVisibleOnly = false,
 	silentMaxDistance = 1000,
 	silentFov = 150,
 	showSilentFov = true,
@@ -1656,6 +1656,85 @@ local function bodyOf(player)
 	local hum = (char and char:FindFirstChildOfClass("Humanoid")) or (body and body:FindFirstChildOfClass("Humanoid"))
 	return body, hum
 end
+
+-- Diagnostics: a snapshot of how this game builds player models, written to the
+-- executor's workspace folder (Vigil-debug.txt) every 5 s for the first 3 minutes.
+local function writeDump()
+	if not canSave then return end
+	local lines = {}
+	local function add(fmt, ...) table.insert(lines, string.format(fmt, ...)) end
+	local function vec(v) return string.format("(%.1f, %.1f, %.1f)", v.X, v.Y, v.Z) end
+	local function pathOf(inst) return inst and inst:GetFullName() or "nil" end
+
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and bodyRoot(myChar)
+	add("place %d  time %.0f  players %d  follow=%s", game.PlaceId, os.clock(), #Players:GetPlayers(), Settings.bodySource)
+	add("me %s char=%s root=%s", LocalPlayer.Name, pathOf(myChar), myRoot and vec(myRoot.Position) or "nil")
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local c = p.Character
+			local r = c and bodyRoot(c)
+			local head = c and c:FindFirstChild("Head")
+			local isPart = head and head:IsA("BasePart")
+			add("player %s display=%s team=%s char=%s root=%s hidden=%s headT=%s headLTM=%s choice=%s",
+				p.Name, p.DisplayName, tostring(p.Team), pathOf(c), r and vec(r.Position) or "nil",
+				c and tostring(looksHidden(c)) or "-", isPart and tostring(head.Transparency) or "-",
+				isPart and tostring(head.LocalTransparencyModifier) or "-", pathOf(bodyChoice[p]))
+			if c then
+				local kids = {}
+				for _, k in ipairs(c:GetChildren()) do
+					local extra = k:IsA("BasePart") and string.format("[T%.2f %s]", k.Transparency, vec(k.Position)) or ""
+					table.insert(kids, k.Name .. ":" .. k.ClassName .. extra)
+				end
+				add("  char children: %s", table.concat(kids, ", "))
+			end
+		end
+	end
+
+	add("-- parts named Head")
+	local heads = 0
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d.Name == "Head" and d:IsA("BasePart") and heads < 60 then
+			heads += 1
+			add("%s pos=%s T=%.2f LTM=%.2f", d:GetFullName(), vec(d.Position), d.Transparency, d.LocalTransparencyModifier)
+		end
+	end
+
+	add("-- character-like models")
+	for model in pairs(bodyModels) do
+		if model.Parent then
+			local r = bodyRoot(model)
+			local attrs = {}
+			for k, v in pairs(model:GetAttributes()) do table.insert(attrs, k .. "=" .. tostring(v)) end
+			local kids = {}
+			for i, k in ipairs(model:GetChildren()) do
+				if i > 20 then break end
+				table.insert(kids, k.Name .. ":" .. k.ClassName)
+			end
+			add("%s root=%s attrs={%s}", model:GetFullName(), r and vec(r.Position) or "nil", table.concat(attrs, ", "))
+			add("  children: %s", table.concat(kids, ", "))
+		end
+	end
+
+	add("-- workspace children")
+	for _, k in ipairs(workspace:GetChildren()) do
+		add("%s:%s (%d)", k.Name, k.ClassName, #k:GetChildren())
+	end
+	local camera = workspace.CurrentCamera
+	if camera then
+		add("-- camera children")
+		for _, k in ipairs(camera:GetChildren()) do add("%s:%s", k.Name, k.ClassName) end
+	end
+	pcall(writefile, "Vigil-debug.txt", table.concat(lines, "\n"))
+end
+
+task.spawn(function()
+	local started = os.clock()
+	while os.clock() - started < 180 and ENV.Vigil ~= nil do
+		task.wait(5)
+		pcall(writeDump)
+	end
+end)
 
 -- Body height above/below its root, refreshed twice a second instead of every frame
 local extentCache = setmetatable({}, { __mode = "k" })
