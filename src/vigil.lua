@@ -1488,6 +1488,20 @@ end
 -- preview always matches what you see in game.
 --------------------------------------------------------------------------------
 
+-- Team names that mean "not fighting" or "everyone for themselves"
+local function teamName(player)
+	return player.Team and string.lower(player.Team.Name) or ""
+end
+local function idleTeam(name)
+	return name:find("lobby") or name:find("spectat") or name:find("menu") or name:find("waiting")
+		or name:find("afk") or name:find("queue") or name:find("intermission")
+end
+local function ffaTeam(name)
+	return name:find("ffa") or name:find("free") or name:find("solo") or name:find("deathmatch")
+		or name:find("everyone") or name:find("neutral")
+end
+
+-- Whether the players who are actually fighting are split over more than one team
 local teamCache = { at = -1, split = false }
 local function teamsSplit()
 	local now = os.clock()
@@ -1496,7 +1510,7 @@ local function teamsSplit()
 		teamCache.split = false
 		local myTeam = LocalPlayer.Team
 		for _, other in ipairs(Players:GetPlayers()) do
-			if other.Team ~= myTeam then
+			if other ~= LocalPlayer and other.Team ~= myTeam and not idleTeam(teamName(other)) then
 				teamCache.split = true
 				break
 			end
@@ -1505,10 +1519,32 @@ local function teamsSplit()
 	return teamCache.split
 end
 
+local TEAM_ATTRIBUTES = { "Team", "TeamName", "TeamId", "TeamID", "Side", "Squad" }
+local function teamAttribute(player)
+	for _, key in ipairs(TEAM_ATTRIBUTES) do
+		local v = player:GetAttribute(key)
+		if v == nil and player.Character then v = player.Character:GetAttribute(key) end
+		if v ~= nil and v ~= "" then return v end
+	end
+end
+
 -- Many games put everyone on one team; that must not count as "all teammates"
 local function isTeammate(player)
+	local mine, theirs = teamAttribute(LocalPlayer), teamAttribute(player)
+	if mine ~= nil and theirs ~= nil then return mine == theirs end
 	local myTeam = LocalPlayer.Team
-	return myTeam ~= nil and player.Team == myTeam and not player.Neutral and teamsSplit()
+	if not myTeam or player.Team ~= myTeam or player.Neutral then return false end
+	if ffaTeam(teamName(player)) then return false end
+	return teamsSplit()
+end
+
+-- Players in a lobby or spectating while we fight, or still spawn-protected, can't be hit
+local function isCombatant(player)
+	local theirs = teamName(player)
+	if idleTeam(theirs) and theirs ~= teamName(LocalPlayer) then return false end
+	local char = player.Character
+	if char and char:FindFirstChildOfClass("ForceField") then return false end
+	return true
 end
 
 local rayParams = RaycastParams.new()
@@ -1570,9 +1606,7 @@ local function ownedBy(model, player)
 	if name == player.Name or name == player.DisplayName or name == tostring(player.UserId) then return true end
 	-- names like "Name_Combat" or "Body_Name"
 	if #player.Name >= 4 and string.find(name, player.Name, 1, true) then return true end
-	for _, value in pairs(model:GetAttributes()) do
-		if value == player.Name or value == player.UserId or value == player.DisplayName then return true end
-	end
+	-- attributes are not checked: games store things like "last hit by" there, which named the wrong body
 	for _, child in ipairs(model:GetChildren()) do
 		if child:IsA("ObjectValue") and child.Value == player then return true end
 		if (child:IsA("StringValue") and child.Value == player.Name)
@@ -1640,8 +1674,8 @@ local function refreshBodies()
 			local isParked = parked(p)
 			-- a parked decoy is only swapped for a model that names its owner; guessing by distance would pick NPCs
 			local needs = not isParked and (mode == "Visible" or not p.Character or looksHidden(p.Character))
-			-- a model that names its owner always wins
-			for _, body in ipairs(free) do
+			-- a model that names its owner wins, but only when the real character can't be used
+			for _, body in ipairs((needs or isParked) and free or {}) do
 				if not body.taken and ownedBy(body.model, p) then
 					bodyChoice[p] = body.model
 					body.taken = true
@@ -2257,6 +2291,7 @@ local function evaluate(player, camera, mouse, cfg)
 	local char, hum = bodyOf(player)
 	if not char or (hum and hum.Health <= 0) then return end
 	if cfg.team and isTeammate(player) then return end
+	if not isCombatant(player) then return end
 	local camPos = camera.CFrame.Position
 	local full = cfg.fov >= FOV_FULL
 	local best, bestScreen, bestWorld, bestSeen
@@ -2280,25 +2315,50 @@ local function evaluate(player, camera, mouse, cfg)
 end
 
 -- Keeps `current` while it stays valid, otherwise picks the best player in the field of view
+local hiddenSince = setmetatable({}, { __mode = "k" }) -- player -> when they went behind cover
+
 function findTarget(camera, mouse, cfg, current)
-	-- a sticky target is kept while it can be hit; one behind a wall is only kept if nobody else can be
-	if current and current.Parent then
-		local part, _, _, seen = evaluate(current, camera, mouse, cfg)
-		if part and seen then return current, part end
+	local function scoreOf(screenDist, worldDist, seen)
+		-- targets that can be hit always rank ahead of ones behind walls
+		return (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
 	end
+
+	-- the current target is kept unless it is gone, or has been behind cover for a moment
+	local now = os.clock()
+	local keepPart, keepScore
+	if current and current.Parent then
+		local part, screenDist, worldDist, seen = evaluate(current, camera, mouse, cfg)
+		if part then
+			if seen then
+				hiddenSince[current] = nil
+			elseif not hiddenSince[current] then
+				hiddenSince[current] = now
+			end
+			local hiddenFor = seen and 0 or now - hiddenSince[current]
+			if hiddenFor < 0.5 then
+				keepPart, keepScore = part, scoreOf(screenDist, worldDist, true)
+				if cfg.sticky then return current, part end
+			end
+		end
+	end
+
 	local bestPlayer, bestPart, bestScore
 	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer then
+		if player ~= LocalPlayer and player ~= current then
 			local part, screenDist, worldDist, seen = evaluate(player, camera, mouse, cfg)
 			if part then
-				-- targets that can be hit always rank ahead of ones behind walls
-				local score = (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
+				local score = scoreOf(screenDist, worldDist, seen)
 				if not bestScore or score < bestScore then
 					bestPlayer, bestPart, bestScore = player, part, score
 				end
 			end
 		end
 	end
+	-- only leave the current target for one that is clearly better, so the aim never flicks between two
+	if keepPart and (not bestScore or bestScore > keepScore * 0.6 - 25) then
+		return current, keepPart
+	end
+	if current then hiddenSince[current] = nil end
 	return bestPlayer, bestPart
 end
 
@@ -2403,7 +2463,8 @@ function aimStep(camera, mouse, dt)
 		currentTarget, part = findTarget(camera, mouse, {
 			part = Settings.aimPart, team = Settings.aimTeamCheck, visible = Settings.visibleOnly,
 			maxDistance = Settings.aimMaxDistance, fov = Settings.fov, priority = Settings.aimPriority,
-		}, Settings.stickyTarget and currentTarget or nil)
+			sticky = Settings.stickyTarget,
+		}, currentTarget)
 	else
 		currentTarget = nil
 	end

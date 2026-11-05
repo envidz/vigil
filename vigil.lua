@@ -1285,6 +1285,17 @@ icon.Parent = fab
 onTheme(function() paint(P.text) end)
 connect(fab.Activated, function() setMenuVisible(not Holder.Visible) end)
 end
+local function teamName(player)
+return player.Team and string.lower(player.Team.Name) or ""
+end
+local function idleTeam(name)
+return name:find("lobby") or name:find("spectat") or name:find("menu") or name:find("waiting")
+or name:find("afk") or name:find("queue") or name:find("intermission")
+end
+local function ffaTeam(name)
+return name:find("ffa") or name:find("free") or name:find("solo") or name:find("deathmatch")
+or name:find("everyone") or name:find("neutral")
+end
 local teamCache = { at = -1, split = false }
 local function teamsSplit()
 local now = os.clock()
@@ -1293,7 +1304,7 @@ teamCache.at = now
 teamCache.split = false
 local myTeam = LocalPlayer.Team
 for _, other in ipairs(Players:GetPlayers()) do
-if other.Team ~= myTeam then
+if other ~= LocalPlayer and other.Team ~= myTeam and not idleTeam(teamName(other)) then
 teamCache.split = true
 break
 end
@@ -1301,9 +1312,28 @@ end
 end
 return teamCache.split
 end
+local TEAM_ATTRIBUTES = { "Team", "TeamName", "TeamId", "TeamID", "Side", "Squad" }
+local function teamAttribute(player)
+for _, key in ipairs(TEAM_ATTRIBUTES) do
+local v = player:GetAttribute(key)
+if v == nil and player.Character then v = player.Character:GetAttribute(key) end
+if v ~= nil and v ~= "" then return v end
+end
+end
 local function isTeammate(player)
+local mine, theirs = teamAttribute(LocalPlayer), teamAttribute(player)
+if mine ~= nil and theirs ~= nil then return mine == theirs end
 local myTeam = LocalPlayer.Team
-return myTeam ~= nil and player.Team == myTeam and not player.Neutral and teamsSplit()
+if not myTeam or player.Team ~= myTeam or player.Neutral then return false end
+if ffaTeam(teamName(player)) then return false end
+return teamsSplit()
+end
+local function isCombatant(player)
+local theirs = teamName(player)
+if idleTeam(theirs) and theirs ~= teamName(LocalPlayer) then return false end
+local char = player.Character
+if char and char:FindFirstChildOfClass("ForceField") then return false end
+return true
 end
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1347,9 +1377,6 @@ local function ownedBy(model, player)
 local name = model.Name
 if name == player.Name or name == player.DisplayName or name == tostring(player.UserId) then return true end
 if #player.Name >= 4 and string.find(name, player.Name, 1, true) then return true end
-for _, value in pairs(model:GetAttributes()) do
-if value == player.Name or value == player.UserId or value == player.DisplayName then return true end
-end
 for _, child in ipairs(model:GetChildren()) do
 if child:IsA("ObjectValue") and child.Value == player then return true end
 if (child:IsA("StringValue") and child.Value == player.Name)
@@ -1407,7 +1434,7 @@ for _, p in ipairs(Players:GetPlayers()) do
 if p ~= LocalPlayer then
 local isParked = parked(p)
 local needs = not isParked and (mode == "Visible" or not p.Character or looksHidden(p.Character))
-for _, body in ipairs(free) do
+for _, body in ipairs((needs or isParked) and free or {}) do
 if not body.taken and ownedBy(body.model, p) then
 bodyChoice[p] = body.model
 body.taken = true
@@ -1949,6 +1976,7 @@ local function evaluate(player, camera, mouse, cfg)
 local char, hum = bodyOf(player)
 if not char or (hum and hum.Health <= 0) then return end
 if cfg.team and isTeammate(player) then return end
+if not isCombatant(player) then return end
 local camPos = camera.CFrame.Position
 local full = cfg.fov >= FOV_FULL
 local best, bestScreen, bestWorld, bestSeen
@@ -1969,23 +1997,44 @@ end
 end
 return best, bestScreen, bestWorld, bestSeen
 end
+local hiddenSince = setmetatable({}, { __mode = "k" }) -- player -> when they went behind cover
 function findTarget(camera, mouse, cfg, current)
+local function scoreOf(screenDist, worldDist, seen)
+return (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
+end
+local now = os.clock()
+local keepPart, keepScore
 if current and current.Parent then
-local part, _, _, seen = evaluate(current, camera, mouse, cfg)
-if part and seen then return current, part end
+local part, screenDist, worldDist, seen = evaluate(current, camera, mouse, cfg)
+if part then
+if seen then
+hiddenSince[current] = nil
+elseif not hiddenSince[current] then
+hiddenSince[current] = now
+end
+local hiddenFor = seen and 0 or now - hiddenSince[current]
+if hiddenFor < 0.5 then
+keepPart, keepScore = part, scoreOf(screenDist, worldDist, true)
+if cfg.sticky then return current, part end
+end
+end
 end
 local bestPlayer, bestPart, bestScore
 for _, player in ipairs(Players:GetPlayers()) do
-if player ~= LocalPlayer then
+if player ~= LocalPlayer and player ~= current then
 local part, screenDist, worldDist, seen = evaluate(player, camera, mouse, cfg)
 if part then
-local score = (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
+local score = scoreOf(screenDist, worldDist, seen)
 if not bestScore or score < bestScore then
 bestPlayer, bestPart, bestScore = player, part, score
 end
 end
 end
 end
+if keepPart and (not bestScore or bestScore > keepScore * 0.6 - 25) then
+return current, keepPart
+end
+if current then hiddenSince[current] = nil end
 return bestPlayer, bestPart
 end
 function circle(filled)
@@ -2073,7 +2122,8 @@ if active then
 currentTarget, part = findTarget(camera, mouse, {
 part = Settings.aimPart, team = Settings.aimTeamCheck, visible = Settings.visibleOnly,
 maxDistance = Settings.aimMaxDistance, fov = Settings.fov, priority = Settings.aimPriority,
-}, Settings.stickyTarget and currentTarget or nil)
+sticky = Settings.stickyTarget,
+}, currentTarget)
 else
 currentTarget = nil
 end
