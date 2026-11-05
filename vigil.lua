@@ -1500,18 +1500,20 @@ end
 
 --------------------------------------------------------------------------------
 -- Visible bodies
--- Some games keep a player's real Character as an invisible decoy and show a
--- separate model instead. Every character-like model in the workspace is
--- tracked, matched to a player, and used whenever the real Character is hidden.
+-- Some games keep a player's real Character as an invisible, server-delayed
+-- decoy and show a separate model instead. Every character-like model is
+-- tracked, matched to its player a few times a second, and the match is what
+-- ESP, aimbot and silent aim follow. Per frame this is a single table lookup.
 --------------------------------------------------------------------------------
 
 local bodyModels = {} -- set of character-like models
-local resolvedBody = {} -- player -> visible model
+local bodyChoice = {} -- player -> visible model used instead of the real Character
 
+local BODY_CLASSES = { Humanoid = true, AnimationController = true }
 local function considerBody(inst)
-	if inst:IsA("Humanoid") or inst:IsA("AnimationController") or (inst.Name == "Head" and inst:IsA("BasePart")) then
+	if BODY_CLASSES[inst.ClassName] or inst.Name == "Head" then
 		local model = inst.Parent
-		if model and model:IsA("Model") then bodyModels[model] = true end
+		if model and model.ClassName == "Model" then bodyModels[model] = true end
 	end
 end
 for _, inst in ipairs(workspace:GetDescendants()) do considerBody(inst) end
@@ -1522,14 +1524,16 @@ local function bodyRoot(model)
 		or model:FindFirstChild("Torso") or model:FindFirstChild("Head")
 end
 
+local function partHidden(part)
+	return part.Transparency >= 0.95 or part.LocalTransparencyModifier >= 0.95
+end
+
 local function looksHidden(char)
 	if not char:IsDescendantOf(workspace) then return true end
 	local head = char:FindFirstChild("Head")
-	if head and head:IsA("BasePart") then
-		return head.Transparency >= 0.95
-	end
+	if head and head:IsA("BasePart") then return partHidden(head) end
 	for _, part in ipairs(char:GetChildren()) do
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Transparency < 0.95 then
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and not partHidden(part) then
 			return false
 		end
 	end
@@ -1553,17 +1557,21 @@ local function ownedBy(model, player)
 end
 
 local function refreshBodies()
-	table.clear(resolvedBody)
+	local mode = Settings.bodySource
+	if mode == "Character" then
+		table.clear(bodyChoice)
+		return
+	end
+
 	local camera = workspace.CurrentCamera
 	local myChar = LocalPlayer.Character
 	local myRoot = myChar and bodyRoot(myChar)
-
 	local realChars = {}
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then realChars[p.Character] = true end
 	end
 
-	local free = {}
+	local free, freeByModel = {}, {}
 	for model in pairs(bodyModels) do
 		if not model.Parent then
 			bodyModels[model] = nil
@@ -1573,45 +1581,57 @@ local function refreshBodies()
 			local nearMe = root and ((myRoot and (root.Position - myRoot.Position).Magnitude < 4)
 				or (camera and (root.Position - camera.CFrame.Position).Magnitude < 4))
 			if root and not nearMe then
-				table.insert(free, { model = model, root = root })
+				local body = { model = model, root = root }
+				table.insert(free, body)
+				freeByModel[model] = body
 			end
 		end
 	end
-	if #free == 0 then return end
 
-	-- 1) models that name their owner
+	local previous = table.clone(bodyChoice)
+	table.clear(bodyChoice)
+
 	local waiting = {}
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= LocalPlayer then
+			local needs = mode == "Visible" or not p.Character or looksHidden(p.Character)
+			-- a model that names its owner always wins
 			for _, body in ipairs(free) do
 				if not body.taken and ownedBy(body.model, p) then
-					resolvedBody[p] = body.model
+					bodyChoice[p] = body.model
 					body.taken = true
 					break
 				end
 			end
-			if not resolvedBody[p] and p.Character and looksHidden(p.Character) then
-				table.insert(waiting, p)
+			if not bodyChoice[p] and needs then
+				-- keep an earlier match so the box never jumps between models
+				local kept = previous[p] and freeByModel[previous[p]]
+				if kept and not kept.taken then
+					bodyChoice[p] = kept.model
+					kept.taken = true
+				else
+					table.insert(waiting, p)
+				end
 			end
 		end
 	end
 
-	-- 2) hidden players left over: pair with the nearest unclaimed model
-	local pairsByDistance = {}
+	-- whoever is left: pair with the nearest unclaimed model
+	local candidates = {}
 	for _, p in ipairs(waiting) do
-		local root = bodyRoot(p.Character)
+		local root = p.Character and bodyRoot(p.Character)
 		for _, body in ipairs(free) do
 			if not body.taken then
 				local d = root and (root.Position - body.root.Position).Magnitude or 0
-				if d < 250 then table.insert(pairsByDistance, { p, body, d }) end
+				if d < 300 then table.insert(candidates, { p, body, d }) end
 			end
 		end
 	end
-	table.sort(pairsByDistance, function(a, b) return a[3] < b[3] end)
-	for _, entry in ipairs(pairsByDistance) do
+	table.sort(candidates, function(a, b) return a[3] < b[3] end)
+	for _, entry in ipairs(candidates) do
 		local p, body = entry[1], entry[2]
-		if not resolvedBody[p] and not body.taken then
-			resolvedBody[p] = body.model
+		if not bodyChoice[p] and not body.taken then
+			bodyChoice[p] = body.model
 			body.taken = true
 		end
 	end
@@ -1621,25 +1641,46 @@ do
 	local elapsed = 1
 	connect(RunService.Heartbeat, function(dt)
 		elapsed += dt
-		if elapsed >= 0.4 then
+		if elapsed >= 0.25 then
 			elapsed = 0
 			refreshBodies()
 		end
 	end)
 end
 
--- Returns the model to draw and aim at, plus the Humanoid that holds health
+-- The model to draw and aim at, plus the Humanoid that holds health
 local function bodyOf(player)
 	local char = player.Character
-	local body = char
-	if Settings.bodySource ~= "Character" then
-		local alt = resolvedBody[player]
-		if alt and alt.Parent and (Settings.bodySource == "Visible" or not char or looksHidden(char)) then
-			body = alt
-		end
-	end
+	local body = bodyChoice[player]
+	if not (body and body.Parent) then body = char end
 	local hum = (char and char:FindFirstChildOfClass("Humanoid")) or (body and body:FindFirstChildOfClass("Humanoid"))
 	return body, hum
+end
+
+-- Body height above/below its root, refreshed twice a second instead of every frame
+local extentCache = setmetatable({}, { __mode = "k" })
+local function bodyExtents(model, root)
+	local now = os.clock()
+	local c = extentCache[model]
+	if not c or now - c.at > 0.5 then
+		local ry = root.Position.Y
+		local up, down = 2.5, -3
+		local found = false
+		for _, part in ipairs(model:GetChildren()) do
+			if part:IsA("BasePart") then
+				local half, y = part.Size.Y / 2, part.Position.Y - ry
+				if not found then
+					up, down, found = y + half, y - half, true
+				else
+					if y + half > up then up = y + half end
+					if y - half < down then down = y - half end
+				end
+			end
+		end
+		c = { up = up, down = down, at = now }
+		extentCache[model] = c
+	end
+	return c.up, c.down
 end
 
 local ZERO = Vector3.zero
@@ -1768,17 +1809,10 @@ end
 local function renderVisual(o, t, project, view)
 	local char, root = t.char, t.root
 
-	local topY, bottomY = -math.huge, math.huge
-	for _, part in ipairs(char:GetChildren()) do
-		if part:IsA("BasePart") then
-			local half, y = part.Size.Y / 2, part.Position.Y
-			if y + half > topY then topY = y + half end
-			if y - half < bottomY then bottomY = y - half end
-		end
-	end
+	local up, down = bodyExtents(char, root)
 	local rp = root.Position
-	local top, zTop = project(Vector3.new(rp.X, topY + 0.15, rp.Z))
-	local bottom, zBottom = project(Vector3.new(rp.X, bottomY - 0.1, rp.Z))
+	local top, zTop = project(Vector3.new(rp.X, rp.Y + up + 0.15, rp.Z))
+	local bottom, zBottom = project(Vector3.new(rp.X, rp.Y + down - 0.1, rp.Z))
 	local size = view.size
 	local cx = (top.X + bottom.X) / 2
 	local offscreen = zTop <= 0 or zBottom <= 0 or cx < 0 or cx > size.X or bottom.Y < 0 or top.Y > size.Y
@@ -1970,11 +2004,20 @@ local function espStep()
 		local hidden = Settings.visCheck and not isVisible(camera, root, char, player.Character)
 		local tool = char:FindFirstChildOfClass("Tool") or (player.Character and player.Character:FindFirstChildOfClass("Tool"))
 
-		local glow = hidden and colour:Lerp(HIDDEN_TINT, 0.55) or colour
-		o.highlight.Adornee = char
-		o.highlight.FillColor = glow
-		o.highlight.OutlineColor = glow
-		o.highlight.Enabled = Settings.highlight
+		-- only touch the Highlight when something changed; rewriting it every frame is costly
+		local hl = o.highlight
+		if Settings.highlight then
+			local glow = hidden and colour:Lerp(HIDDEN_TINT, 0.55) or colour
+			if hl.Adornee ~= char then hl.Adornee = char end
+			if o.glow ~= glow then
+				o.glow = glow
+				hl.FillColor = glow
+				hl.OutlineColor = glow
+			end
+			if not hl.Enabled then hl.Enabled = true end
+		elseif hl.Enabled then
+			hl.Enabled = false
+		end
 
 		renderVisual(o, {
 			char = char, root = root, colour = colour, hidden = hidden,
@@ -1988,7 +2031,7 @@ end
 for _, player in ipairs(Players:GetPlayers()) do createEsp(player) end
 connect(Players.PlayerAdded, createEsp)
 connect(Players.PlayerRemoving, removeEsp)
-connect(RunService.RenderStepped, espStep)
+-- espStep runs from the render step after the camera updates (see the per-frame driver)
 
 -- Menu preview -----------------------------------------------------------------
 
@@ -2140,6 +2183,25 @@ end
 local fovCircle, fovStroke = circle(false)
 local currentTarget
 
+-- Velocity measured from on-screen movement. Visible models are often anchored
+-- and moved by the game, so their physics velocity reads zero.
+local motion = setmetatable({}, { __mode = "k" })
+local function measuredVelocity(part)
+	local now, pos = os.clock(), part.Position
+	local m = motion[part]
+	if not m then
+		motion[part] = { pos = pos, vel = Vector3.zero, at = now }
+		return Vector3.zero
+	end
+	local dt = now - m.at
+	if dt > 0.001 then
+		local v = dt < 0.25 and (pos - m.pos) / dt or Vector3.zero
+		m.vel = m.vel:Lerp(v, 0.35)
+		m.pos, m.at = pos, now
+	end
+	return m.vel
+end
+
 local function aimStep(camera, mouse, dt)
 	if Settings.aimMode ~= "Toggle" or not Settings.aimEnabled then aimToggled = false end
 	local active = false
@@ -2166,7 +2228,10 @@ local function aimStep(camera, mouse, dt)
 	placeCircle(fovCircle, fovStroke, Settings.aimEnabled and Settings.showFov, mouse, Settings.fov, part ~= nil)
 	if not part then return end
 
-	local aimPos = part.Position + part.AssemblyLinearVelocity * (Settings.prediction / 1000)
+	local aimPos = part.Position
+	if Settings.prediction > 0 then
+		aimPos += measuredVelocity(part) * (Settings.prediction / 1000)
+	end
 	-- frame-rate independent easing; smoothing 1 snaps
 	local alpha = Settings.smoothing <= 1 and 1 or 1 - (1 - 1 / Settings.smoothing) ^ (dt * 60)
 
@@ -2368,11 +2433,17 @@ local crosshairDot = new("Frame", {
 }, { new("UIStroke", { Thickness = 1, Color = World.outline, Transparency = 0.5 }) })
 local ARM_DIRECTIONS = { Vector2.new(0, -1), Vector2.new(0, 1), Vector2.new(-1, 0), Vector2.new(1, 0) }
 
+local atmosphereScan = 0
 local function visualsStep(camera, mouse)
 	override(Settings.fullbright, Lighting, FULLBRIGHT)
 	override(Settings.noFog, Lighting, NO_FOG)
-	for _, child in ipairs(Lighting:GetChildren()) do
-		if child:IsA("Atmosphere") then override(Settings.noFog, child, NO_ATMOSPHERE) end
+	-- looking for Atmosphere objects once a second is plenty
+	local now = os.clock()
+	if now - atmosphereScan > 1 then
+		atmosphereScan = now
+		for _, child in ipairs(Lighting:GetChildren()) do
+			if child:IsA("Atmosphere") then override(Settings.noFog, child, NO_ATMOSPHERE) end
+		end
 	end
 	if Settings.lockTime then enforce(Lighting, "ClockTime", Settings.timeOfDay) else release(Lighting, "ClockTime") end
 	if Settings.camFovEnabled then enforce(camera, "FieldOfView", Settings.camFov) else release(camera, "FieldOfView") end
@@ -2541,6 +2612,7 @@ RunService:BindToRenderStep(RENDER_STEP, Enum.RenderPriority.Camera.Value + 1, f
 	visualsStep(camera, mouse)
 	silentStep(camera, mouse)
 	aimStep(camera, mouse, dt)
+	espStep() -- last, so boxes use this frame's final camera and never trail behind
 end)
 
 --------------------------------------------------------------------------------
@@ -2612,7 +2684,11 @@ local function activeModules()
 end
 
 local lastSignature
-connect(RunService.Heartbeat, function()
+local modulesElapsed = 1
+connect(RunService.Heartbeat, function(dt)
+	modulesElapsed += dt
+	if modulesElapsed < 0.2 then return end -- five updates a second is enough for a list
+	modulesElapsed = 0
 	modulesList.Visible = Settings.showModules
 	if not Settings.showModules then return end
 	local list = activeModules()
