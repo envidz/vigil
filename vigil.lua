@@ -855,6 +855,7 @@ onTheme(render)
 end
 end
 end
+local FOV_FULL = 1500
 local Presets, applyPreset
 do
 Presets = {
@@ -873,6 +874,14 @@ aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Crosshai
 fov = 500, showFov = true, smoothing = 1, visibleOnly = false, stickyTarget = false,
 aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head", hitChance = 100,
 silentFov = 600, silentVisibleOnly = false, showSilentTarget = true, silentMaxDistance = 3000,
+} },
+{ "Ultra rage", { -- full screen, through walls, snaps and stays on the target
+aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance",
+fov = FOV_FULL, showFov = false, smoothing = 1, prediction = 0, visibleOnly = false,
+stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
+hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
+showSilentTarget = true, silentMaxDistance = 3000, silentRaycast = true, silentMouse = true,
+silentCameraRays = true,
 } },
 }
 function applyPreset(name, values)
@@ -1118,7 +1127,7 @@ switch(aimPage, "Visible only", "visibleOnly")
 switch(aimPage, "Stay on target", "stickyTarget")
 slider(aimPage, "Max distance", "aimMaxDistance", 50, 3000, 50, function(v) return string.format("%d studs", v) end)
 section(aimPage, "Feel")
-slider(aimPage, "Field of view", "fov", 30, 500, 5, function(v) return string.format("%d px", v) end)
+slider(aimPage, "Field of view", "fov", 30, FOV_FULL, 10, function(v) return v >= FOV_FULL and "Full screen" or string.format("%d px", v) end)
 switch(aimPage, "Show field of view", "showFov")
 slider(aimPage, "Smoothing", "smoothing", 1, 20, 1, function(v) return v == 1 and "Off" or string.format("%d", v) end)
 slider(aimPage, "Prediction", "prediction", 0, 250, 10, function(v) return v == 0 and "Off" or string.format("%d ms", v) end)
@@ -1135,7 +1144,7 @@ switch(silentPage, "Ignore teammates", "silentTeamCheck")
 switch(silentPage, "Visible only", "silentVisibleOnly")
 slider(silentPage, "Max distance", "silentMaxDistance", 50, 3000, 50, function(v) return string.format("%d studs", v) end)
 section(silentPage, "Field of view")
-slider(silentPage, "Radius", "silentFov", 30, 600, 5, function(v) return string.format("%d px", v) end)
+slider(silentPage, "Radius", "silentFov", 30, FOV_FULL, 10, function(v) return v >= FOV_FULL and "Full screen" or string.format("%d px", v) end)
 switch(silentPage, "Show circle", "showSilentFov")
 switch(silentPage, "Mark target", "showSilentTarget")
 section(silentPage, "Redirect")
@@ -1337,6 +1346,7 @@ end
 local function ownedBy(model, player)
 local name = model.Name
 if name == player.Name or name == player.DisplayName or name == tostring(player.UserId) then return true end
+if #player.Name >= 4 and string.find(name, player.Name, 1, true) then return true end
 for _, value in pairs(model:GetAttributes()) do
 if value == player.Name or value == player.UserId or value == player.DisplayName then return true end
 end
@@ -1379,10 +1389,24 @@ end
 end
 local previous = table.clone(bodyChoice)
 table.clear(bodyChoice)
+local roots = {}
+for _, p in ipairs(Players:GetPlayers()) do
+local r = p.Character and bodyRoot(p.Character)
+if r then roots[p] = r.Position end
+end
+local function parked(p)
+local pos = roots[p]
+if not pos then return false end
+for other, q in pairs(roots) do
+if other ~= p and (q - pos).Magnitude < 2 then return true end
+end
+return false
+end
 local waiting = {}
 for _, p in ipairs(Players:GetPlayers()) do
 if p ~= LocalPlayer then
-local needs = mode == "Visible" or not p.Character or looksHidden(p.Character)
+local isParked = parked(p)
+local needs = not isParked and (mode == "Visible" or not p.Character or looksHidden(p.Character))
 for _, body in ipairs(free) do
 if not body.taken and ownedBy(body.model, p) then
 bodyChoice[p] = body.model
@@ -1490,6 +1514,17 @@ add("%s root=%s attrs={%s}", model:GetFullName(), r and vec(r.Position) or "nil"
 add("  children: %s", table.concat(kids, ", "))
 end
 end
+for _, folderName in ipairs({ "CombatPlayers", "Solo", "GameBC", "Debris" }) do
+local folder = workspace:FindFirstChild(folderName)
+if folder then
+add("-- %s", folder:GetFullName())
+for i, k in ipairs(folder:GetDescendants()) do
+if i > 80 then break end
+local extra = k:IsA("BasePart") and (" " .. vec(k.Position)) or ""
+add("  %s:%s%s", k:GetFullName(), k.ClassName, extra)
+end
+end
+end
 add("-- workspace children")
 for _, k in ipairs(workspace:GetChildren()) do
 add("%s:%s (%d)", k.Name, k.ClassName, #k:GetChildren())
@@ -1503,8 +1538,8 @@ pcall(writefile, "Vigil-debug.txt", table.concat(lines, "\n"))
 end
 task.spawn(function()
 local started = os.clock()
-while os.clock() - started < 180 and ENV.Vigil ~= nil do
-task.wait(5)
+while os.clock() - started < 900 and ENV.Vigil ~= nil do
+task.wait(8)
 pcall(writeDump)
 end
 end)
@@ -1915,14 +1950,15 @@ local char, hum = bodyOf(player)
 if not char or (hum and hum.Health <= 0) then return end
 if cfg.team and isTeammate(player) then return end
 local camPos = camera.CFrame.Position
+local full = cfg.fov >= FOV_FULL
 local best, bestScreen, bestWorld
 for _, part in pairs(candidateParts(char, cfg.part)) do
 local worldDist = (camPos - part.Position).Magnitude
 if worldDist <= cfg.maxDistance then
 local screen, onScreen = camera:WorldToViewportPoint(part.Position)
-if onScreen then
-local screenDist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
-if screenDist <= cfg.fov and (not bestScreen or screenDist < bestScreen)
+if onScreen or full then
+local screenDist = onScreen and (Vector2.new(screen.X, screen.Y) - mouse).Magnitude or 1e5 + worldDist
+if (full or screenDist <= cfg.fov) and (not bestScreen or screenDist < bestScreen)
 and (not cfg.visible or isVisible(camera, part, char, player.Character)) then
 best, bestScreen, bestWorld = part, screenDist, worldDist
 end
@@ -2009,7 +2045,7 @@ maxDistance = Settings.aimMaxDistance, fov = Settings.fov, priority = Settings.a
 else
 currentTarget = nil
 end
-placeCircle(fovCircle, fovStroke, Settings.aimEnabled and Settings.showFov, mouse, Settings.fov, part ~= nil)
+placeCircle(fovCircle, fovStroke, Settings.aimEnabled and Settings.showFov and Settings.fov < FOV_FULL, mouse, Settings.fov, part ~= nil)
 if not part then return end
 local aimPos = part.Position
 if Settings.prediction > 0 then
@@ -2048,7 +2084,7 @@ part = Settings.silentPart, team = Settings.silentTeamCheck, visible = Settings.
 maxDistance = Settings.silentMaxDistance, fov = Settings.silentFov, priority = "Crosshair",
 })
 end
-placeCircle(silentCircle, silentStroke, enabled and Settings.showSilentFov, mouse, Settings.silentFov, part ~= nil)
+placeCircle(silentCircle, silentStroke, enabled and Settings.showSilentFov and Settings.silentFov < FOV_FULL, mouse, Settings.silentFov, part ~= nil)
 if not part then
 silent.active = false
 marker.Visible = false
