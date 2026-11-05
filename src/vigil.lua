@@ -129,7 +129,7 @@ local Settings = {
 	showFov = true,
 	smoothing = 4,
 	prediction = 0,
-	aimMethod = "Camera",
+	aimMethod = "Auto",
 	silentEnabled = false,
 	silentPart = "Head",
 	hitChance = 100,
@@ -991,7 +991,7 @@ do
 
 Presets = {
 	{ "Legit", {
-		aimEnabled = true, aimMode = "Hold", aimPart = "Torso", aimPriority = "Crosshair",
+		aimEnabled = true, aimMode = "Hold", aimPart = "Torso", aimPriority = "Crosshair", aimMethod = "Auto",
 		fov = 80, showFov = false, smoothing = 8, prediction = 0, visibleOnly = true,
 		aimTeamCheck = true, stickyTarget = true, aimMaxDistance = 800, silentEnabled = false,
 	} },
@@ -1001,13 +1001,13 @@ Presets = {
 		silentTeamCheck = true, silentMaxDistance = 1000,
 	} },
 	{ "Rage", {
-		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Crosshair",
+		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto",
 		fov = 500, showFov = true, smoothing = 1, visibleOnly = false, stickyTarget = false,
 		aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head", hitChance = 100,
 		silentFov = 600, silentVisibleOnly = false, showSilentTarget = true, silentMaxDistance = 3000,
 	} },
 	{ "Ultra rage", { -- full screen, through walls, snaps and stays on the target
-		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance",
+		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance", aimMethod = "Auto",
 		fov = FOV_FULL, showFov = false, smoothing = 1, prediction = 0, visibleOnly = false,
 		stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
 		hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
@@ -1267,10 +1267,10 @@ do -- repair saved values that no longer fit this executor or the option lists
 		aimMode = { Hold = true, Toggle = true, Always = true },
 		aimPart = { Head = true, Torso = true },
 		aimPriority = { Crosshair = true, Distance = true },
-		aimMethod = { Camera = true, Mouse = canMoveMouse },
+		aimMethod = { Auto = true, Camera = true, Mouse = canMoveMouse },
 		tracerOrigin = { Bottom = true, Centre = true, Mouse = true },
 	}
-	local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Camera", tracerOrigin = "Bottom" }
+	local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto", tracerOrigin = "Bottom" }
 	for key, allowed in pairs(choices) do
 		if not allowed[Settings[key]] then Settings[key] = defaults[key] end
 	end
@@ -1297,7 +1297,7 @@ switch(aimPage, "Show field of view", "showFov")
 slider(aimPage, "Smoothing", "smoothing", 1, 20, 1, function(v) return v == 1 and "Off" or string.format("%d", v) end)
 slider(aimPage, "Prediction", "prediction", 0, 250, 10, function(v) return v == 0 and "Off" or string.format("%d ms", v) end)
 if canMoveMouse then
-	segmented(aimPage, "Method", "aimMethod", { "Camera", "Mouse" })
+	segmented(aimPage, "Method", "aimMethod", { "Auto", "Camera", "Mouse" })
 end
 
 -- Silent aim page
@@ -2259,7 +2259,7 @@ local function evaluate(player, camera, mouse, cfg)
 	if cfg.team and isTeammate(player) then return end
 	local camPos = camera.CFrame.Position
 	local full = cfg.fov >= FOV_FULL
-	local best, bestScreen, bestWorld
+	local best, bestScreen, bestWorld, bestSeen
 	for _, part in pairs(candidateParts(char, cfg.part)) do
 		local worldDist = (camPos - part.Position).Magnitude
 		if worldDist <= cfg.maxDistance then
@@ -2267,28 +2267,32 @@ local function evaluate(player, camera, mouse, cfg)
 			if onScreen or full then
 				-- off-screen targets rank after every on-screen one
 				local screenDist = onScreen and (Vector2.new(screen.X, screen.Y) - mouse).Magnitude or 1e5 + worldDist
-				if (full or screenDist <= cfg.fov) and (not bestScreen or screenDist < bestScreen)
-					and (not cfg.visible or isVisible(camera, part, char, player.Character)) then
-					best, bestScreen, bestWorld = part, screenDist, worldDist
+				if (full or screenDist <= cfg.fov) and (not bestScreen or screenDist < bestScreen) then
+					local seen = isVisible(camera, part, char, player.Character)
+					if seen or not cfg.visible then
+						best, bestScreen, bestWorld, bestSeen = part, screenDist, worldDist, seen
+					end
 				end
 			end
 		end
 	end
-	return best, bestScreen, bestWorld
+	return best, bestScreen, bestWorld, bestSeen
 end
 
 -- Keeps `current` while it stays valid, otherwise picks the best player in the field of view
 function findTarget(camera, mouse, cfg, current)
+	-- a sticky target is kept while it can be hit; one behind a wall is only kept if nobody else can be
 	if current and current.Parent then
-		local part = evaluate(current, camera, mouse, cfg)
-		if part then return current, part end
+		local part, _, _, seen = evaluate(current, camera, mouse, cfg)
+		if part and seen then return current, part end
 	end
 	local bestPlayer, bestPart, bestScore
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player ~= LocalPlayer then
-			local part, screenDist, worldDist = evaluate(player, camera, mouse, cfg)
+			local part, screenDist, worldDist, seen = evaluate(player, camera, mouse, cfg)
 			if part then
-				local score = cfg.priority == "Distance" and worldDist or screenDist
+				-- targets that can be hit always rank ahead of ones behind walls
+				local score = (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
 				if not bestScore or score < bestScore then
 					bestPlayer, bestPart, bestScore = player, part, score
 				end
@@ -2322,7 +2326,7 @@ end
 --------------------------------------------------------------------------------
 -- Aimbot
 --------------------------------------------------------------------------------
-local motion, aimStep
+local motion, aimStep, mouseAim
 do
 
 local fovCircle, fovStroke = circle(false)
@@ -2345,6 +2349,40 @@ local function measuredVelocity(part)
 		m.pos, m.at = pos, now
 	end
 	return m.vel
+end
+
+-- Mouse aiming works in angles: each game turns the camera by its own number of
+-- degrees per mouse pixel, so that ratio is measured from how far each move turned it.
+local mouseCal = { degPerPixel = 0.25, sentX = 0, sentY = 0 }
+local function cameraAngles(cf)
+	local look = cf.LookVector
+	return math.deg(math.atan2(-look.X, -look.Z)), math.deg(math.asin(math.clamp(look.Y, -1, 1)))
+end
+local function wrapAngle(a)
+	return (a + 180) % 360 - 180
+end
+function mouseAim(camera, aimPos, gain)
+	local cf = camera.CFrame
+	local yaw, pitch = cameraAngles(cf)
+	-- learn degrees per pixel from the last move
+	local cal = mouseCal
+	if cal.yaw and math.abs(cal.sentX) >= 4 then
+		local turned = math.abs(wrapAngle(yaw - cal.yaw))
+		local sample = turned / math.abs(cal.sentX)
+		if sample > 0.005 and sample < 3 then
+			cal.degPerPixel = cal.degPerPixel * 0.85 + sample * 0.15
+		end
+	end
+	local d = cf:VectorToObjectSpace(aimPos - cf.Position)
+	local yawErr = math.deg(math.atan2(d.X, -d.Z)) -- positive: target is to the right
+	local pitchErr = math.deg(math.atan2(d.Y, math.sqrt(d.X * d.X + d.Z * d.Z))) -- positive: above
+	local k = cal.degPerPixel
+	local dx = math.clamp(yawErr / k * gain, -2000, 2000)
+	local dy = math.clamp(-pitchErr / k * gain, -2000, 2000)
+	cal.yaw, cal.sentX, cal.sentY = yaw, dx, dy
+	if math.abs(dx) >= 0.5 or math.abs(dy) >= 0.5 then
+		mousemoverel(math.round(dx), math.round(dy))
+	end
 end
 
 function aimStep(camera, mouse, dt)
@@ -2380,10 +2418,14 @@ function aimStep(camera, mouse, dt)
 	-- frame-rate independent easing; smoothing 1 snaps
 	local alpha = Settings.smoothing <= 1 and 1 or 1 - (1 - 1 / Settings.smoothing) ^ (dt * 60)
 
-	if Settings.aimMethod == "Mouse" and canMoveMouse then
-		local screen = camera:WorldToViewportPoint(aimPos)
-		local delta = (Vector2.new(screen.X, screen.Y) - mouse) * alpha
-		mousemoverel(delta.X, delta.Y)
+	local method = Settings.aimMethod
+	if method == "Auto" then
+		-- a Scriptable camera is driven by the game every frame and would undo a camera turn
+		method = (canMoveMouse and camera.CameraType == Enum.CameraType.Scriptable) and "Mouse" or "Camera"
+	end
+
+	if method == "Mouse" and canMoveMouse then
+		mouseAim(camera, aimPos, Settings.smoothing <= 1 and 0.6 or alpha * 0.6)
 	else
 		local cf = camera.CFrame
 		camera.CFrame = cf:Lerp(CFrame.lookAt(cf.Position, aimPos), alpha)

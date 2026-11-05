@@ -1,10 +1,11 @@
 // Builds the published vigil.lua from src/vigil.lua.
-// Xeno refuses scripts larger than about 100 KB, so the published copy drops the
-// header comment, whole-line comments, indentation and blank lines. Nothing
-// inside a line is touched, so behaviour is unchanged.
+// The published copy drops the header comment, whole-line comments, indentation
+// and blank lines to keep the download small. Nothing inside a line is touched,
+// so behaviour is unchanged. Xeno's real limit is 200 top-level locals (checked
+// with luau-compile -O0), not file size.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const LIMIT = 95_000; // keep clear of Xeno's ~100 KB ceiling
+const LIMIT = 250_000; // sanity cap only
 
 const source = readFileSync(new URL("./src/vigil.lua", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -29,6 +30,6 @@ writeFileSync(new URL("./vigil.lua", import.meta.url), result);
 const bytes = Buffer.byteLength(result);
 console.log(`vigil.lua: ${bytes} bytes (source ${Buffer.byteLength(source)})`);
 if (bytes > LIMIT) {
-	console.error(`over the ${LIMIT} byte budget for Xeno`);
+	console.error(`over the ${LIMIT} byte sanity cap`);
 	process.exit(1);
 }
