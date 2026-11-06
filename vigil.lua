@@ -100,6 +100,7 @@ aimMode = "Hold",
 aimPart = "Head",
 aimPriority = "Crosshair",
 aimTeamCheck = true,
+aimTargets = "Players",
 visibleOnly = false,
 stickyTarget = true,
 aimMaxDistance = 1000,
@@ -112,6 +113,7 @@ silentEnabled = false,
 silentPart = "Head",
 hitChance = 100,
 silentTeamCheck = true,
+silentTargets = "Players",
 silentVisibleOnly = false,
 silentMaxDistance = 1000,
 silentFov = 150,
@@ -862,18 +864,19 @@ Presets = {
 { "Legit", {
 aimEnabled = true, aimMode = "Hold", aimPart = "Torso", aimPriority = "Crosshair", aimMethod = "Auto",
 fov = 80, showFov = false, smoothing = 8, prediction = 0, visibleOnly = true,
-aimTeamCheck = true, stickyTarget = true, aimMaxDistance = 800, silentEnabled = false,
+aimTeamCheck = true, stickyTarget = true, aimMaxDistance = 800, silentEnabled = false, aimTargets = "Players",
 } },
 { "Silent", {
 aimEnabled = false, silentEnabled = true, silentPart = "Closest", hitChance = 75,
 silentFov = 100, showSilentFov = false, showSilentTarget = false, silentVisibleOnly = true,
-silentTeamCheck = true, silentMaxDistance = 1000,
+silentTeamCheck = true, silentMaxDistance = 1000, silentTargets = "Players",
 } },
 { "Rage", {
 aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto",
 fov = 500, showFov = true, smoothing = 1, visibleOnly = false, stickyTarget = false,
 aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head", hitChance = 100,
 silentFov = 600, silentVisibleOnly = false, showSilentTarget = true, silentMaxDistance = 3000,
+aimTargets = "Players", silentTargets = "Players",
 } },
 { "Ultra rage", { -- full screen, through walls, snaps and stays on the target
 aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance", aimMethod = "Auto",
@@ -881,7 +884,15 @@ fov = FOV_FULL, showFov = false, smoothing = 1, prediction = 0, visibleOnly = fa
 stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
 hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
 showSilentTarget = true, silentMaxDistance = 3000, silentRaycast = true, silentMouse = true,
-silentCameraRays = true,
+silentCameraRays = true, aimTargets = "Players", silentTargets = "Players",
+} },
+{ "NPC ultra rage", { -- the same, but only on NPCs (bots, mobs, dummies)
+aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance", aimMethod = "Auto",
+fov = FOV_FULL, showFov = false, smoothing = 1, prediction = 0, visibleOnly = false,
+stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
+hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
+showSilentTarget = true, silentMaxDistance = 3000, silentRaycast = true, silentMouse = true,
+silentCameraRays = true, aimTargets = "NPCs", silentTargets = "NPCs",
 } },
 }
 function applyPreset(name, values)
@@ -1105,10 +1116,12 @@ bodySource = { Auto = true, Visible = true, Character = true },
 aimMode = { Hold = true, Toggle = true, Always = true },
 aimPart = { Head = true, Torso = true },
 aimPriority = { Crosshair = true, Distance = true },
+aimTargets = { Players = true, NPCs = true, Both = true },
+silentTargets = { Players = true, NPCs = true, Both = true },
 aimMethod = { Auto = true, Camera = true, Mouse = canMoveMouse },
 tracerOrigin = { Bottom = true, Centre = true, Mouse = true },
 }
-local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto", tracerOrigin = "Bottom" }
+local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto", tracerOrigin = "Bottom", aimTargets = "Players", silentTargets = "Players" }
 for key, allowed in pairs(choices) do
 if not allowed[Settings[key]] then Settings[key] = defaults[key] end
 end
@@ -1120,6 +1133,7 @@ switch(aimPage, "Enabled", "aimEnabled")
 keybind(aimPage, "Aim key", "aimKey", true)
 segmented(aimPage, "Activation", "aimMode", { "Hold", "Toggle", "Always" })
 section(aimPage, "Target")
+segmented(aimPage, "Targets", "aimTargets", { "Players", "NPCs", "Both" })
 segmented(aimPage, "Aim at", "aimPart", { "Head", "Torso" })
 segmented(aimPage, "Prefer", "aimPriority", { "Crosshair", "Distance" })
 switch(aimPage, "Ignore teammates", "aimTeamCheck")
@@ -1138,6 +1152,7 @@ local silentPage = page("silent")
 if canHook then
 switch(silentPage, "Enabled", "silentEnabled")
 section(silentPage, "Target")
+segmented(silentPage, "Targets", "silentTargets", { "Players", "NPCs", "Both" })
 segmented(silentPage, "Aim at", "silentPart", { "Head", "Torso", "Closest" })
 slider(silentPage, "Hit chance", "hitChance", 0, 100, 1, function(v) return string.format("%d%%", v) end)
 switch(silentPage, "Ignore teammates", "silentTeamCheck")
@@ -1342,7 +1357,7 @@ rayParams.FilterDescendantsInstances = { camera, LocalPlayer.Character, char, ex
 local origin = camera.CFrame.Position
 return workspace:Raycast(origin, part.Position - origin, rayParams) == nil
 end
-local bodyOf, outline, Esp, removeEsp, espStep
+local bodyOf, outline, Esp, removeEsp, espStep, npcModels
 do
 local bodyModels = {} -- set of character-like models
 local bodyChoice = {} -- player -> visible model used instead of the real Character
@@ -1471,6 +1486,30 @@ body.taken = true
 end
 end
 end
+npcModels = {}
+local function refreshNpcs()
+table.clear(npcModels)
+if Settings.aimTargets == "Players" and Settings.silentTargets == "Players" then return end
+local owned = {}
+for _, p in ipairs(Players:GetPlayers()) do
+if p.Character then owned[p.Character] = true end
+if bodyChoice[p] then owned[bodyChoice[p]] = true end
+end
+local myChar = LocalPlayer.Character
+local camera = workspace.CurrentCamera
+for model in pairs(bodyModels) do
+if model.Parent and not owned[model] and model:IsDescendantOf(workspace)
+and not (myChar and model:IsDescendantOf(myChar)) then
+local outer = model:FindFirstAncestorWhichIsA("Model")
+local hum = model:FindFirstChildOfClass("Humanoid")
+local root = bodyRoot(model)
+if hum and hum.Health > 0 and root and root:IsA("BasePart") and not (outer and owned[outer])
+and not (camera and (root.Position - camera.CFrame.Position).Magnitude < 4) then
+table.insert(npcModels, model)
+end
+end
+end
+end
 do
 local elapsed = 1
 connect(RunService.Heartbeat, function(dt)
@@ -1478,6 +1517,7 @@ elapsed += dt
 if elapsed >= 0.25 then
 elapsed = 0
 refreshBodies()
+refreshNpcs()
 end
 end)
 end
@@ -1968,26 +2008,40 @@ RENDER_STEP = "VigilRender"
 local function candidateParts(char, mode)
 local head = char:FindFirstChild("Head")
 local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+head = (head and head:IsA("BasePart")) and head or nil
+torso = (torso and torso:IsA("BasePart")) and torso or nil
+head, torso = head or torso, torso or head -- NPCs are often missing one of them
 if mode == "Head" then return { head } end
 if mode == "Torso" then return { torso } end
 return { head, torso } -- "Closest": whichever sits nearer the cursor
 end
-local function evaluate(player, camera, mouse, cfg)
-local char, hum = bodyOf(player)
+local function evaluate(target, camera, mouse, cfg)
+local who = cfg.targets or "Players"
+local char, hum, extra
+if target:IsA("Player") then
+if who == "NPCs" then return end
+char, hum = bodyOf(target)
 if not char or (hum and hum.Health <= 0) then return end
-if cfg.team and isTeammate(player) then return end
-if not isCombatant(player) then return end
+if cfg.team and isTeammate(target) then return end
+if not isCombatant(target) then return end
+extra = target.Character
+else
+if who == "Players" or not target:IsDescendantOf(workspace) then return end
+char, hum = target, target:FindFirstChildOfClass("Humanoid")
+if not hum or hum.Health <= 0 then return end
+end
 local camPos = camera.CFrame.Position
 local full = cfg.fov >= FOV_FULL
 local best, bestScreen, bestWorld, bestSeen
 for _, part in pairs(candidateParts(char, cfg.part)) do
+if not part.Parent then continue end
 local worldDist = (camPos - part.Position).Magnitude
 if worldDist <= cfg.maxDistance then
 local screen, onScreen = camera:WorldToViewportPoint(part.Position)
 if onScreen or full then
 local screenDist = onScreen and (Vector2.new(screen.X, screen.Y) - mouse).Magnitude or 1e5 + worldDist
 if (full or screenDist <= cfg.fov) and (not bestScreen or screenDist < bestScreen) then
-local seen = isVisible(camera, part, char, player.Character)
+local seen = isVisible(camera, part, char, extra)
 if seen or not cfg.visible then
 best, bestScreen, bestWorld, bestSeen = part, screenDist, worldDist, seen
 end
@@ -2020,16 +2074,24 @@ end
 end
 end
 local bestPlayer, bestPart, bestScore
-for _, player in ipairs(Players:GetPlayers()) do
-if player ~= LocalPlayer and player ~= current then
-local part, screenDist, worldDist, seen = evaluate(player, camera, mouse, cfg)
+local function consider(target)
+if target == current then return end
+local part, screenDist, worldDist, seen = evaluate(target, camera, mouse, cfg)
 if part then
 local score = scoreOf(screenDist, worldDist, seen)
 if not bestScore or score < bestScore then
-bestPlayer, bestPart, bestScore = player, part, score
+bestPlayer, bestPart, bestScore = target, part, score
 end
 end
 end
+local who = cfg.targets or "Players"
+if who ~= "NPCs" then
+for _, player in ipairs(Players:GetPlayers()) do
+if player ~= LocalPlayer then consider(player) end
+end
+end
+if who ~= "Players" then
+for _, model in ipairs(npcModels) do consider(model) end
 end
 if keepPart and (not bestScore or bestScore > keepScore * 0.6 - 25) then
 return current, keepPart
@@ -2122,7 +2184,7 @@ if active then
 currentTarget, part = findTarget(camera, mouse, {
 part = Settings.aimPart, team = Settings.aimTeamCheck, visible = Settings.visibleOnly,
 maxDistance = Settings.aimMaxDistance, fov = Settings.fov, priority = Settings.aimPriority,
-sticky = Settings.stickyTarget,
+sticky = Settings.stickyTarget, targets = Settings.aimTargets,
 }, currentTarget)
 else
 currentTarget = nil
@@ -2166,6 +2228,7 @@ local _
 _, part = findTarget(camera, mouse, {
 part = Settings.silentPart, team = Settings.silentTeamCheck, visible = Settings.silentVisibleOnly,
 maxDistance = Settings.silentMaxDistance, fov = Settings.silentFov, priority = "Crosshair",
+targets = Settings.silentTargets,
 })
 end
 placeCircle(silentCircle, silentStroke, enabled and Settings.showSilentFov and Settings.silentFov < FOV_FULL, mouse, Settings.silentFov, part ~= nil)
