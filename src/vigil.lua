@@ -403,16 +403,40 @@ local ICON_STROKE = 1.6
 
 function iconEye()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
-	local lid = new("Frame", {
-		Size = UDim2.fromOffset(18, 11), AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1, Parent = root,
+	local fills = {}
+	local ARM = 5
+	for _, c in ipairs({ { 1, 1, 0, 0 }, { 19, 1, 1, 0 }, { 1, 19, 0, 1 }, { 19, 19, 1, 1 } }) do
+		local anchor = Vector2.new(c[3], c[4])
+		table.insert(fills, new("Frame", {
+			Size = UDim2.fromOffset(ARM, ICON_STROKE), Position = UDim2.fromOffset(c[1], c[2]),
+			AnchorPoint = anchor, BorderSizePixel = 0, Parent = root,
+		}))
+		table.insert(fills, new("Frame", {
+			Size = UDim2.fromOffset(ICON_STROKE, ARM), Position = UDim2.fromOffset(c[1], c[2]),
+			AnchorPoint = anchor, BorderSizePixel = 0, Parent = root,
+		}))
+	end
+	-- head and shoulders
+	local head = new("Frame", {
+		Size = UDim2.fromOffset(5, 5), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(10, 7.5),
+		BackgroundTransparency = 1, Parent = root,
 	}, { round("full") })
-	local s = new("UIStroke", { Thickness = ICON_STROKE, Parent = lid })
-	local pupil = new("Frame", {
-		Size = UDim2.fromOffset(5, 5), AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5), BorderSizePixel = 0, Parent = root,
+	local clip = new("Frame", {
+		Size = UDim2.fromOffset(12, 4.5), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(10, 11.5),
+		BackgroundTransparency = 1, ClipsDescendants = true, Parent = root,
+	})
+	local body = new("Frame", {
+		Size = UDim2.fromOffset(9, 9), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 1),
+		BackgroundTransparency = 1, Parent = clip,
 	}, { round("full") })
-	return root, function(c) s.Color = c; pupil.BackgroundColor3 = c end
+	local strokes = {
+		new("UIStroke", { Thickness = ICON_STROKE, Parent = head }),
+		new("UIStroke", { Thickness = ICON_STROKE, Parent = body }),
+	}
+	return root, function(c)
+		for _, f in ipairs(fills) do f.BackgroundColor3 = c end
+		for _, st in ipairs(strokes) do st.Color = c end
+	end
 end
 
 function iconSliders()
@@ -484,23 +508,22 @@ end
 
 function iconSun()
 	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
-	local core = new("Frame", {
-		Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1, Parent = root,
+	local ring = new("Frame", {
+		Size = UDim2.fromOffset(15, 15), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		BackgroundTransparency = 1, Parent = root,
 	}, { round("full") })
-	local s = new("UIStroke", { Thickness = ICON_STROKE, Parent = core })
-	local rays = {}
-	for i = 0, 7 do
-		local a = math.rad(i * 45)
-		table.insert(rays, new("Frame", {
-			Size = UDim2.fromOffset(ICON_STROKE, 3), AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromOffset(10 + math.sin(a) * 8, 10 - math.cos(a) * 8),
-			Rotation = i * 45, BorderSizePixel = 0, Parent = root,
-		}))
-	end
+	local s = new("UIStroke", { Thickness = ICON_STROKE, Parent = ring })
+	-- the left half of a disc, cut by a clipping frame
+	local half = new("Frame", {
+		Size = UDim2.fromOffset(7.5, 15), Position = UDim2.fromOffset(2.5, 2.5),
+		BackgroundTransparency = 1, ClipsDescendants = true, Parent = root,
+	})
+	local disc = new("Frame", {
+		Size = UDim2.fromOffset(15, 15), BorderSizePixel = 0, Parent = half,
+	}, { round("full") })
 	return root, function(c)
 		s.Color = c
-		for _, r in ipairs(rays) do r.BackgroundColor3 = c end
+		disc.BackgroundColor3 = c
 	end
 end
 
