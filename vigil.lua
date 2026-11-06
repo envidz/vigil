@@ -247,6 +247,13 @@ return
 end
 TweenService:Create(inst, TweenInfo.new(d, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
+local function tweenStyle(inst, props, duration, style, direction)
+if reducedMotion then
+for k, v in pairs(props) do inst[k] = v end
+return
+end
+TweenService:Create(inst, TweenInfo.new(duration, style or Enum.EasingStyle.Quint, direction or Enum.EasingDirection.Out), props):Play()
+end
 local function prettyKey(name)
 return (name:gsub("(%l)(%u)", "%1 %2"):gsub("(%a)(%d)", "%1 %2"))
 end
@@ -529,7 +536,7 @@ FontFace = Tokens.font, TextSize = Tokens.text.small, AnchorPoint = Vector2.new(
 }, { round(Tokens.radius.sm), padding(5, 9) })
 bind(tip, "BackgroundColor3", "raised")
 bind(tip, "TextColor3", "text")
-bind(new("UIStroke", { Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tip }), "Color", "border")
+local tipStroke = bind(new("UIStroke", { Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tip }), "Color", "border")
 local tipToken = 0
 function hideTip()
 tipToken += 1
@@ -544,7 +551,10 @@ if mine ~= tipToken or not Holder.Visible then return end
 local pos, size = target.AbsolutePosition, target.AbsoluteSize
 tip.Text = text
 tip.Position = UDim2.fromOffset(pos.X + size.X + Tokens.space.sm, pos.Y + size.Y / 2)
+tip.BackgroundTransparency, tip.TextTransparency, tipStroke.Transparency = 1, 1, 1
 tip.Visible = true
+tweenStyle(tip, { BackgroundTransparency = 0, TextTransparency = 0 }, 0.14, Enum.EasingStyle.Quad)
+tweenStyle(tipStroke, { Transparency = 0 }, 0.14, Enum.EasingStyle.Quad)
 end)
 end)
 connect(target.MouseLeave, hideTip)
@@ -577,6 +587,16 @@ bind(toastAction, "BackgroundColor3", "raised")
 bind(toastAction, "TextColor3", "accent")
 local toastToken = 0
 local toastCallback
+local toastScale = new("UIScale", { Parent = toastFrame })
+local TOAST_POS = toastFrame.Position
+local TOAST_LOW = TOAST_POS + UDim2.fromOffset(0, 14)
+local function hideToast(mine)
+tweenStyle(toastFrame, { Position = TOAST_LOW }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+tweenStyle(toastScale, { Scale = 0.96 }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+task.delay(reducedMotion and 0 or 0.16, function()
+if mine == toastToken then toastFrame.Visible = false end
+end)
+end
 function toast(text, actionText, action)
 toastToken += 1
 local mine = toastToken
@@ -584,24 +604,40 @@ toastLabel.Text = text
 toastAction.Visible = actionText ~= nil
 toastAction.Text = actionText or ""
 toastCallback = action
+if toastFrame.Visible then
+toastScale.Scale = 0.98
+else
+toastFrame.Position = TOAST_LOW
+toastScale.Scale = 0.96
 toastFrame.Visible = true
+end
+tweenStyle(toastFrame, { Position = TOAST_POS }, 0.3)
+tweenStyle(toastScale, { Scale = 1 }, 0.3)
 task.delay(actionText and 5 or 2.5, function()
 if mine == toastToken then
-toastFrame.Visible = false
 toastCallback = nil
+hideToast(mine)
 end
 end)
 end
 table.insert(connections, toastAction.Activated:Connect(function()
 local fn = toastCallback
 toastToken += 1
-toastFrame.Visible = false
 toastCallback = nil
+hideToast(toastToken)
 if fn then fn() end
 end))
 end
-local iconButton, section, row, switchRenders, switch, note, slider, segmented, swatches, keyCapture, consumedInput, aimToggled, keybind, actionButton, buttonRow, nextOrder
+local iconButton, section, row, switchRenders, switch, note, slider, segmented, swatches, keyCapture, consumedInput, aimToggled, keybind, actionButton, buttonRow, nextOrder, pressable
 do
+function pressable(btn)
+local scale = new("UIScale", { Parent = btn })
+connect(btn.MouseButton1Down, function() tweenStyle(scale, { Scale = 0.95 }, 0.08, Enum.EasingStyle.Quad) end)
+local function up() tweenStyle(scale, { Scale = 1 }, 0.25, Enum.EasingStyle.Back) end
+connect(btn.MouseButton1Up, up)
+connect(btn.MouseLeave, up)
+return btn
+end
 local order = 0
 function nextOrder()
 order += 1
@@ -617,9 +653,10 @@ local icon, paint = makeIcon()
 icon.AnchorPoint = Vector2.new(0.5, 0.5)
 icon.Position = UDim2.fromScale(0.5, 0.5)
 icon.Parent = btn
+pressable(btn)
 local state = { hovered = false, active = false }
 local function render()
-btn.BackgroundTransparency = (state.active and 0.35) or (state.hovered and 0.6) or 1
+tween(btn, { BackgroundTransparency = (state.active and 0.35) or (state.hovered and 0.6) or 1 }, 0.12)
 paint((state.active or state.hovered) and P.text or P[idleToken or "muted"])
 end
 connect(btn.MouseEnter, function() state.hovered = true; render() end)
@@ -671,8 +708,8 @@ local trackProps = { BackgroundColor3 = on and P.accent or P.raised }
 local knobProps = { Position = on and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0) }
 knob.BackgroundColor3 = on and P.onAccent or P.knob
 if animate then
-tween(track, trackProps)
-tween(knob, knobProps)
+tween(track, trackProps, 0.18)
+tweenStyle(knob, knobProps, 0.3, Enum.EasingStyle.Back)
 else
 track.BackgroundColor3 = trackProps.BackgroundColor3
 knob.Position = knobProps.Position
@@ -725,7 +762,13 @@ fill.BackgroundColor3 = P.accent
 knob.BackgroundColor3 = P.accent
 value.Text = format(Settings[key])
 end
-local dragging = false
+local dragging, hovering = false, false
+local function knobSize()
+local px = dragging and 18 or (hovering and 16 or 14)
+tweenStyle(knob, { Size = UDim2.fromOffset(px, px) }, 0.18, Enum.EasingStyle.Back)
+end
+connect(hit.MouseEnter, function() hovering = true; knobSize() end)
+connect(hit.MouseLeave, function() hovering = false; knobSize() end)
 local function setFromX(x)
 local a = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
 local v = math.floor((min + (max - min) * a) / step + 0.5) * step
@@ -737,6 +780,7 @@ end
 connect(hit.InputBegan, function(input)
 if isPointer(input) then
 dragging = true
+knobSize()
 setFromX(input.Position.X)
 end
 end)
@@ -748,6 +792,7 @@ end)
 connect(UserInputService.InputEnded, function(input)
 if dragging and isPointer(input) then
 dragging = false
+knobSize()
 save()
 end
 end)
@@ -773,13 +818,13 @@ AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = optio
 FontFace = Tokens.font, TextSize = Tokens.text.small + 1, AutoButtonColor = false,
 BorderSizePixel = 0, LayoutOrder = i, Parent = holder,
 }, { round(Tokens.radius.sm), padding(0, 12) })
+pressable(buttons[option])
 end
 local function render()
 for option, btn in pairs(buttons) do
 local selected = Settings[key] == option
 btn.BackgroundColor3 = P.bg
-btn.BackgroundTransparency = selected and 0 or 1
-btn.TextColor3 = selected and P.text or P.muted
+tween(btn, { BackgroundTransparency = selected and 0 or 1, TextColor3 = selected and P.text or P.muted }, 0.15)
 end
 end
 for option, btn in pairs(buttons) do
@@ -839,6 +884,7 @@ AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.con
 FontFace = Tokens.mono, TextSize = Tokens.text.small, AutoButtonColor = false,
 BorderSizePixel = 0, Parent = r,
 }), { round(Tokens.radius.md), padding(0, 12) })
+pressable(btn)
 local listening = false
 local function render()
 btn.Text = listening and (allowMouse and "Press a key or button" or "Press a key") or bindName(Settings[key])
@@ -868,10 +914,10 @@ AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, Tokens.size.con
 Text = text, FontFace = Tokens.font, TextSize = Tokens.text.small + 1, AutoButtonColor = false,
 BorderSizePixel = 0, Parent = r,
 }), { round(Tokens.radius.md), padding(0, 14) })
+pressable(btn)
 local hovered = false
 local function render()
-btn.BackgroundColor3 = hovered and P.danger or P.raised
-btn.TextColor3 = hovered and P.onAccent or P.danger
+tween(btn, { BackgroundColor3 = hovered and P.danger or P.raised, TextColor3 = hovered and P.onAccent or P.danger }, 0.12)
 end
 connect(btn.MouseEnter, function() hovered = true; render() end)
 connect(btn.MouseLeave, function() hovered = false; render() end)
@@ -895,9 +941,10 @@ AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = entry
 FontFace = Tokens.font, TextSize = Tokens.text.small + 1, AutoButtonColor = false,
 BorderSizePixel = 0, LayoutOrder = i, Parent = holder,
 }, { round(Tokens.radius.md), padding(0, 12) })
+pressable(btn)
 local hovered = false
 local function render()
-btn.BackgroundColor3 = hovered and P.hover or P.raised
+tween(btn, { BackgroundColor3 = hovered and P.hover or P.raised }, 0.12)
 btn.TextColor3 = P.text
 end
 connect(btn.MouseEnter, function() hovered = true; render() end)
@@ -982,11 +1029,48 @@ local tabs = {
 { id = "players", title = "Players", icon = iconPeople },
 { id = "settings", title = "Settings", icon = iconSliders, bottom = true },
 }
+local tabPill = new("Frame", {
+Size = UDim2.fromOffset(3, 18), AnchorPoint = Vector2.new(0, 0.5), BorderSizePixel = 0, ZIndex = 3, Parent = rail,
+}, { round("full") })
+bind(tabPill, "BackgroundColor3", "accent")
+local function pillPosition(id)
+local topIndex = 0
+for _, tab in ipairs(tabs) do
+if tab.bottom then
+if tab.id == id then return UDim2.new(0, 0, 1, -Tokens.space.md - 20) end
+else
+topIndex += 1
+if tab.id == id then return UDim2.fromOffset(0, Tokens.space.md + (topIndex - 1) * (40 + Tokens.space.xs) + 20) end
+end
+end
+end
+local currentTab
 local function selectTab(id)
+local changed = currentTab ~= id
+local first = currentTab == nil
+currentTab = id
 for _, tab in ipairs(tabs) do
 pages[tab.id].Visible = tab.id == id
 tabSetters[tab.id](tab.id == id)
 if tab.id == id then title.Text = tab.title end
+end
+local target = pillPosition(id)
+if target then
+if first then
+tabPill.Position = target
+else
+tabPill.Size = UDim2.fromOffset(3, 26)
+tweenStyle(tabPill, { Position = target }, 0.32)
+tweenStyle(tabPill, { Size = UDim2.fromOffset(3, 18) }, 0.4, Enum.EasingStyle.Back)
+end
+end
+if changed and not first then
+local p = pages[id]
+local home = UDim2.fromOffset(0, Tokens.size.header)
+p.Position = home + UDim2.fromOffset(0, 10)
+tweenStyle(p, { Position = home }, 0.3)
+title.TextTransparency = 0.6
+tweenStyle(title, { TextTransparency = 0 }, 0.25, Enum.EasingStyle.Quad)
 end
 for tabId, panel in pairs(tabExtras) do
 panel.Visible = tabId == id
@@ -1336,13 +1420,40 @@ connect(UserInputService.InputEnded, function(input)
 if isPointer(input) then dragStart = nil end
 end)
 end
+local veil = new("Frame", {
+Size = UDim2.fromScale(1, 1), BorderSizePixel = 0, BackgroundTransparency = 1, Visible = false, ZIndex = 40, Parent = Window,
+}, { round(Tokens.radius.lg) })
+bind(veil, "BackgroundColor3", "bg")
+local menuOpen, menuToken = true, 0
 local function setMenuVisible(visible)
-if visible == Holder.Visible then return end
+if visible == menuOpen and visible == Holder.Visible then return end
+menuOpen = visible
+menuToken += 1
+local mine = menuToken
 hideTip()
-Holder.Visible = visible
 if visible then
-windowScale.Scale = baseScale * 0.97
-tween(windowScale, { Scale = baseScale })
+Holder.Visible = true
+veil.Visible = true
+veil.BackgroundTransparency = 0
+windowScale.Scale = baseScale * 0.94
+shadow.ImageTransparency = 1
+tweenStyle(windowScale, { Scale = baseScale }, 0.38)
+tweenStyle(veil, { BackgroundTransparency = 1 }, 0.26, Enum.EasingStyle.Quad)
+tweenStyle(shadow, { ImageTransparency = P.shadow }, 0.35, Enum.EasingStyle.Quad)
+task.delay(0.3, function()
+if mine == menuToken then veil.Visible = false end
+end)
+else
+veil.Visible = true
+tweenStyle(windowScale, { Scale = baseScale * 0.95 }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+tweenStyle(veil, { BackgroundTransparency = 0 }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+tweenStyle(shadow, { ImageTransparency = 1 }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+task.delay(reducedMotion and 0 or 0.16, function()
+if mine ~= menuToken then return end
+Holder.Visible = false
+veil.Visible = false
+windowScale.Scale = baseScale
+end)
 end
 end
 local touchOnly = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
@@ -1362,7 +1473,7 @@ return
 end
 if UserInputService:GetFocusedTextBox() then return end
 if name == Settings.menuKey then
-setMenuVisible(not Holder.Visible)
+setMenuVisible(not (menuOpen and Holder.Visible))
 end
 if name == Settings.aimKey and Settings.aimMode == "Toggle" then
 aimToggled = not aimToggled
@@ -1380,7 +1491,7 @@ icon.AnchorPoint = Vector2.new(0.5, 0.5)
 icon.Position = UDim2.fromScale(0.5, 0.5)
 icon.Parent = fab
 onTheme(function() paint(P.text) end)
-connect(fab.Activated, function() setMenuVisible(not Holder.Visible) end)
+connect(fab.Activated, function() setMenuVisible(not (menuOpen and Holder.Visible)) end)
 end
 local function teamName(player)
 return player.Team and string.lower(player.Team.Name) or ""
@@ -3114,8 +3225,9 @@ AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = b[1],
 TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
 BackgroundColor3 = P.raised, TextColor3 = b[3] and P.danger or (b[4] and P.accent or P.text), Parent = holder,
 }, { round(Tokens.radius.sm), padding(0, 9) })
-connect(btn.MouseEnter, function() btn.BackgroundColor3 = P.hover end)
-connect(btn.MouseLeave, function() btn.BackgroundColor3 = P.raised end)
+pressable(btn)
+connect(btn.MouseEnter, function() tween(btn, { BackgroundColor3 = P.hover }, 0.12) end)
+connect(btn.MouseLeave, function() tween(btn, { BackgroundColor3 = P.raised }, 0.12) end)
 connect(btn.Activated, b[2])
 end
 return detail
@@ -3340,6 +3452,7 @@ for p, label in pairs(detailLabels) do
 if label.Parent then label.Text = detailOf(p) end
 end
 end)
+do -- own scope, so its locals don't count against the main chunk's register limit
 local CONFIG_FILE = "Vigil-configs.json"
 local SKIP = { perGame = true, showLoader = true }
 local configs = readJson(CONFIG_FILE) or {}
@@ -3442,6 +3555,8 @@ buttonRow(settingsPage, "Share", shareButtons)
 note(settingsPage, canSave and "Saved configs are kept in Vigil-configs.json. Copy one to share it, and paste a friend's into Import."
 or "This executor can't write files, so saved configs only last until you leave.")
 onTheme(function() renderConfigs() end)
+end
+do
 local WAYPOINT_FILE = "Vigil-waypoints.json"
 local PLACE = tostring(game.PlaceId)
 local waypointsAll = readJson(WAYPOINT_FILE) or {}
@@ -3493,10 +3608,12 @@ end } })
 wpList = listBox(movementPage)
 note(movementPage, "Waypoints are kept per game.")
 onTheme(function() renderWaypoints() end)
+end
 section(movementPage, "Freecam")
 keybind(movementPage, "Freecam key", "freecamKey")
 slider(movementPage, "Freecam speed", "freecamSpeed", 10, 300, 5, function(v) return string.format("%d studs/s", v) end)
 note(movementPage, "Your character stays frozen where it is. Hold right mouse to look around, WASD, E and Q to move, Shift to go faster.")
+do
 section(movementPage, "Spin")
 switch(movementPage, "Spinbot", "spin")
 slider(movementPage, "Spin speed", "spinSpeed", 1, 20, 1, function(v) return string.format("%d turns/s", v) end)
@@ -3515,6 +3632,15 @@ spinning = false
 if hum then hum.AutoRotate = true end
 end
 end)
+features.stopSpin = function()
+if not spinning then return end
+spinning = false
+local char = LocalPlayer.Character
+local hum = char and char:FindFirstChildOfClass("Humanoid")
+if hum then hum.AutoRotate = true end
+end
+end
+do
 section(visualsPage, "Hitmarker")
 switch(visualsPage, "Show hitmarker", "hitmarker")
 switch(visualsPage, "Hit sound", "hitSound")
@@ -3591,15 +3717,12 @@ if i > 150 then break end
 check(model, model:FindFirstChildOfClass("Humanoid"))
 end
 end)
+end
 features.cleanup = function()
 setFreecam(false)
 features.spectate = nil
 cameraSubjectHome()
-if spinning then
-local char = LocalPlayer.Character
-local hum = char and char:FindFirstChildOfClass("Humanoid")
-if hum then hum.AutoRotate = true end
-end
+if features.stopSpin then features.stopSpin() end
 end
 end
 RunService:BindToRenderStep(RENDER_STEP, Enum.RenderPriority.Camera.Value + 1, function(dt)
@@ -3742,7 +3865,19 @@ Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = P.bg, BorderSizePixel =
 GroupTransparency = 1, Parent = loaderGui,
 }, { round(Tokens.radius.lg), padding(Tokens.space.lg + 4) })
 new("UIStroke", { Color = P.border, Thickness = Tokens.stroke, Parent = card })
-local cardScale = new("UIScale", { Scale = 0.96, Parent = card })
+local cardScale = new("UIScale", { Scale = 0.94, Parent = card })
+local cardShadow = new("ImageLabel", {
+Image = "rbxassetid://6014261993", ScaleType = Enum.ScaleType.Slice, SliceCenter = Rect.new(49, 49, 450, 450),
+ImageColor3 = Color3.new(0, 0, 0), ImageTransparency = 1, BackgroundTransparency = 1,
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 6), Size = UDim2.fromOffset(320 + 60, 148 + 60),
+Parent = loaderGui,
+})
+local blur
+pcall(function()
+blur = new("BlurEffect", { Size = 0, Parent = workspace.CurrentCamera })
+loaderGui.Destroying:Connect(function() blur:Destroy() end)
+end)
+card.Position = UDim2.new(0.5, 0, 0.5, 10)
 local word = new("Frame", {
 Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Parent = card,
 }, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder }) })
@@ -3802,9 +3937,11 @@ end
 end)
 end
 task.spawn(function()
-tween(backdrop, { BackgroundTransparency = 0.6 }, 0.25)
-tween(card, { GroupTransparency = 0 }, 0.25)
-tween(cardScale, { Scale = 1 }, 0.3)
+tweenStyle(backdrop, { BackgroundTransparency = 0.55 }, 0.4, Enum.EasingStyle.Quad)
+if blur then tweenStyle(blur, { Size = 16 }, 0.5, Enum.EasingStyle.Quad) end
+tweenStyle(card, { GroupTransparency = 0, Position = UDim2.fromScale(0.5, 0.5) }, 0.45)
+tweenStyle(cardScale, { Scale = 1 }, 0.5)
+tweenStyle(cardShadow, { ImageTransparency = 0.45, Position = UDim2.new(0.5, 0, 0.5, 6) }, 0.5, Enum.EasingStyle.Quad)
 for _, l in ipairs(letters) do
 if fast then
 l.Position, l.TextTransparency = UDim2.fromOffset(0, 0), 0
@@ -3833,14 +3970,18 @@ end
 if not alive() then return end
 status.TextColor3 = P.accent
 task.wait(fast and 0 or 0.25)
-tween(card, { GroupTransparency = 1 }, 0.2)
-tween(cardScale, { Scale = 1.03 }, 0.2)
-tween(backdrop, { BackgroundTransparency = 1 }, 0.2)
-task.wait(fast and 0 or 0.2)
+local out = { Enum.EasingStyle.Quad, Enum.EasingDirection.In }
+tweenStyle(card, { GroupTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -8) }, 0.22, out[1], out[2])
+tweenStyle(cardScale, { Scale = 0.97 }, 0.22, out[1], out[2])
+tweenStyle(cardShadow, { ImageTransparency = 1 }, 0.2, out[1], out[2])
+tweenStyle(backdrop, { BackgroundTransparency = 1 }, 0.35, Enum.EasingStyle.Quad)
+if blur then tweenStyle(blur, { Size = 0 }, 0.35, Enum.EasingStyle.Quad) end
+task.wait(fast and 0 or 0.12)
 if not alive() then return end
-loaderGui:Destroy()
-loaderGui = nil
 setMenuVisible(true)
+task.wait(fast and 0 or 0.25)
+if loaderGui then loaderGui:Destroy() end
+loaderGui = nil
 end)
 end
 end
