@@ -1617,22 +1617,37 @@ local function refreshSplit()
 	end
 end
 
+-- Friend lookups are web requests, so they only run while the option is on,
+-- one player at a time, and never more than once per player
 local friends = setmetatable({}, { __mode = "k" })
-local function checkFriend(p)
-	if p == LocalPlayer then return end
-	task.spawn(function()
-		local ok, yes = pcall(function() return LocalPlayer:IsFriendsWith(p.UserId) end)
-		friends[p] = ok and yes or false
-	end)
+local friendQueue, friendBusy = {}, false
+local function isFriend(p)
+	local known = friends[p]
+	if known ~= nil then return known end
+	friends[p] = false
+	table.insert(friendQueue, p)
+	if not friendBusy then
+		friendBusy = true
+		task.defer(function()
+			while #friendQueue > 0 do
+				local q = table.remove(friendQueue, 1)
+				if q.Parent then
+					local ok, yes = pcall(LocalPlayer.IsFriendsWith, LocalPlayer, q.UserId)
+					friends[q] = ok and yes == true
+				end
+				task.wait(0.2)
+			end
+			friendBusy = false
+		end)
+	end
+	return false
 end
-for _, p in ipairs(Players:GetPlayers()) do checkFriend(p) end
-connect(Players.PlayerAdded, checkFriend)
 
 function isTeammate(player)
 	if player == LocalPlayer then return true end
 	local mark = allyMarks[player]
 	if mark ~= nil then return mark end
-	if Settings.friendsAsTeam and friends[player] then return true end
+	if Settings.friendsAsTeam and isFriend(player) then return true end
 
 	-- a team the game stores itself is the most reliable signal
 	local mine, theirs = tagOf(LocalPlayer), tagOf(player)

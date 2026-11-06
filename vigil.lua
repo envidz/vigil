@@ -1395,20 +1395,33 @@ end
 end
 end
 local friends = setmetatable({}, { __mode = "k" })
-local function checkFriend(p)
-if p == LocalPlayer then return end
-task.spawn(function()
-local ok, yes = pcall(function() return LocalPlayer:IsFriendsWith(p.UserId) end)
-friends[p] = ok and yes or false
+local friendQueue, friendBusy = {}, false
+local function isFriend(p)
+local known = friends[p]
+if known ~= nil then return known end
+friends[p] = false
+table.insert(friendQueue, p)
+if not friendBusy then
+friendBusy = true
+task.defer(function()
+while #friendQueue > 0 do
+local q = table.remove(friendQueue, 1)
+if q.Parent then
+local ok, yes = pcall(LocalPlayer.IsFriendsWith, LocalPlayer, q.UserId)
+friends[q] = ok and yes == true
+end
+task.wait(0.2)
+end
+friendBusy = false
 end)
 end
-for _, p in ipairs(Players:GetPlayers()) do checkFriend(p) end
-connect(Players.PlayerAdded, checkFriend)
+return false
+end
 function isTeammate(player)
 if player == LocalPlayer then return true end
 local mark = allyMarks[player]
 if mark ~= nil then return mark end
-if Settings.friendsAsTeam and friends[player] then return true end
+if Settings.friendsAsTeam and isFriend(player) then return true end
 local mine, theirs = tagOf(LocalPlayer), tagOf(player)
 if mine and theirs then
 if mine ~= theirs then return false end
