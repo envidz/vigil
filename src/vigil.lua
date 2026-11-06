@@ -129,6 +129,7 @@ local Settings = {
 	radarTeam = true,
 	panicKey = "End",
 	perGame = false,
+	showLoader = true,
 	bodySource = "Auto",
 	aimEnabled = false,
 	aimKey = "MouseButton2",
@@ -1446,6 +1447,7 @@ end
 
 section(settingsPage, "Appearance")
 switch(settingsPage, "Show active modules", "showModules")
+switch(settingsPage, "Loading screen", "showLoader")
 segmented(settingsPage, "Theme", "theme", { "Dark", "Light" }, function() applyTheme() end)
 swatches(settingsPage, "Accent", "accent", Accents)
 
@@ -3591,6 +3593,123 @@ end)
 end
 
 --------------------------------------------------------------------------------
+-- Loading screen: a short card with a progress bar, then the menu opens
+--------------------------------------------------------------------------------
+local loaderGui, runLoader
+do
+local STEPS = {
+	{ "Loading settings", 0.22 },
+	{ "Building menu", 0.5 },
+	{ "Starting ESP", 0.72 },
+	{ "Hooking aim", 0.9 },
+	{ "Ready", 1 },
+}
+
+local function executorName()
+	if typeof(identifyexecutor) == "function" then
+		local ok, name, version = pcall(identifyexecutor)
+		if ok and type(name) == "string" and name ~= "" then
+			return type(version) == "string" and version ~= "" and (name .. " " .. version) or name
+		end
+	end
+	return "Unknown executor"
+end
+
+function runLoader()
+	loaderGui = new("ScreenGui", {
+		Name = "VigilLoader", ResetOnSpawn = false, IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 9002, Parent = ROOT,
+	})
+	local backdrop = new("Frame", {
+		Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Parent = loaderGui,
+	})
+	local card = new("CanvasGroup", {
+		Size = UDim2.fromOffset(320, 148), AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = P.bg, BorderSizePixel = 0,
+		GroupTransparency = 1, Parent = loaderGui,
+	}, { round(Tokens.radius.lg), padding(Tokens.space.lg + 4) })
+	new("UIStroke", { Color = P.border, Thickness = Tokens.stroke, Parent = card })
+	local cardScale = new("UIScale", { Scale = 0.96, Parent = card })
+
+	-- wordmark
+	local mark = new("Frame", {
+		Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(0, 8), BackgroundColor3 = P.accent,
+		BorderSizePixel = 0, Parent = card,
+	}, { round("full") })
+	new("TextLabel", {
+		Text = "Vigil", FontFace = Tokens.fontStrong, TextSize = 24, TextColor3 = P.text,
+		TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(18, 0), Size = UDim2.new(1, -18, 0, 26), Parent = card,
+	})
+	new("TextLabel", {
+		Text = executorName(), FontFace = Tokens.font, TextSize = Tokens.text.small, TextColor3 = P.muted,
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+		BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 0, 18), Parent = card,
+	})
+
+	-- status and progress
+	local status = new("TextLabel", {
+		Text = STEPS[1][1], FontFace = Tokens.font, TextSize = Tokens.text.small, TextColor3 = P.muted,
+		TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -14), Size = UDim2.new(1, -44, 0, 18),
+		Parent = card,
+	})
+	local percent = new("TextLabel", {
+		Text = "0%", FontFace = Tokens.mono, TextSize = Tokens.text.small, TextColor3 = P.muted,
+		TextXAlignment = Enum.TextXAlignment.Right, BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, -14), Size = UDim2.fromOffset(44, 18),
+		Parent = card,
+	})
+	local track = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 4),
+		BackgroundColor3 = P.raised, BorderSizePixel = 0, Parent = card,
+	}, { round("full") })
+	local fill = new("Frame", {
+		Size = UDim2.fromScale(0, 1), BackgroundColor3 = P.accent, BorderSizePixel = 0, Parent = track,
+	}, { round("full") })
+
+	local alive = function() return loaderGui and loaderGui.Parent ~= nil end
+	local fast = reducedMotion
+
+	task.spawn(function()
+		tween(backdrop, { BackgroundTransparency = 0.6 }, 0.25)
+		tween(card, { GroupTransparency = 0 }, 0.25)
+		tween(cardScale, { Scale = 1 }, 0.3)
+		task.wait(fast and 0 or 0.25)
+
+		local shown = 0
+		for _, step in ipairs(STEPS) do
+			if not alive() then return end
+			status.Text = step[1]
+			tween(fill, { Size = UDim2.fromScale(step[2], 1) }, 0.22)
+			-- count the percentage up alongside the bar
+			local from, to, start = shown, math.floor(step[2] * 100), os.clock()
+			repeat
+				local t = fast and 1 or math.clamp((os.clock() - start) / 0.22, 0, 1)
+				percent.Text = string.format("%d%%", math.floor(from + (to - from) * t))
+				task.wait()
+			until t >= 1 or not alive()
+			shown = to
+			task.wait(fast and 0 or 0.08)
+		end
+		if not alive() then return end
+		status.TextColor3 = P.accent
+		task.wait(fast and 0 or 0.25)
+
+		tween(card, { GroupTransparency = 1 }, 0.2)
+		tween(cardScale, { Scale = 1.03 }, 0.2)
+		tween(backdrop, { BackgroundTransparency = 1 }, 0.2)
+		task.wait(fast and 0 or 0.2)
+		if not alive() then return end
+		loaderGui:Destroy()
+		loaderGui = nil
+		setMenuVisible(true)
+	end)
+end
+end
+
+--------------------------------------------------------------------------------
 -- Lifecycle
 --------------------------------------------------------------------------------
 
@@ -3609,6 +3728,7 @@ unload = function()
 	for player in pairs(Esp) do removeEsp(player) end
 	espGui:Destroy()
 	menuGui:Destroy()
+	if loaderGui then pcall(function() loaderGui:Destroy() end) end
 	highlightFolder:Destroy()
 	if ENV.Vigil and ENV.Vigil.Unload == unload then ENV.Vigil = nil end
 end
@@ -3617,3 +3737,7 @@ ENV.Vigil = { Unload = unload, Settings = Settings }
 
 selectTab("esp")
 applyTheme()
+if Settings.showLoader then
+	Holder.Visible = false
+	runLoader()
+end
