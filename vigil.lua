@@ -73,6 +73,7 @@ healthLow = Color3.fromRGB(235, 70, 70),
 healthHigh = Color3.fromRGB(80, 220, 120),
 }
 local SAVE_FILE = "Vigil.json"
+local GAME_FILE = "Vigil-" .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId) .. ".json" -- used when "per game" is on
 local Settings = {
 enabled = true,
 boxes = true,
@@ -96,6 +97,16 @@ visCheck = false,
 npcEsp = false,
 friendsAsTeam = false,
 allyKey = "Z",
+triggerEnabled = false,
+triggerMode = "Always",
+triggerFire = "Hold",
+triggerDelay = 40,
+triggerRate = 10,
+radarEnabled = false,
+radarRange = 200,
+radarTeam = true,
+panicKey = "End",
+perGame = false,
 bodySource = "Auto",
 aimEnabled = false,
 aimKey = "MouseButton2",
@@ -152,14 +163,17 @@ menuKey = "RightShift",
 local canSave = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
 if canSave then
 pcall(function()
-if isfile(SAVE_FILE) then
-local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+local function apply(path, keepPerGame)
+if not isfile(path) then return end
+local data = HttpService:JSONDecode(readfile(path))
 for k, v in pairs(data) do
-if Settings[k] ~= nil and typeof(v) == typeof(Settings[k]) then
+if Settings[k] ~= nil and typeof(v) == typeof(Settings[k]) and not (keepPerGame and k == "perGame") then
 Settings[k] = v
 end
 end
 end
+apply(SAVE_FILE)
+if Settings.perGame then apply(GAME_FILE, true) end
 end)
 if not pcall(function() return Enum.KeyCode[Settings.menuKey] end) then
 Settings.menuKey = "RightShift"
@@ -174,7 +188,18 @@ if not canSave or saveQueued then return end
 saveQueued = true
 task.delay(0.5, function()
 saveQueued = false
+if Settings.perGame then
+pcall(writefile, GAME_FILE, HttpService:JSONEncode(Settings))
+pcall(function()
+local shared = isfile(SAVE_FILE) and HttpService:JSONDecode(readfile(SAVE_FILE)) or {}
+if shared.perGame ~= true then
+shared.perGame = true
+writefile(SAVE_FILE, HttpService:JSONEncode(shared))
+end
+end)
+else
 pcall(writefile, SAVE_FILE, HttpService:JSONEncode(Settings))
+end
 end)
 end
 local connections = {}
@@ -1125,16 +1150,19 @@ aimPart = { Head = true, Torso = true },
 aimPriority = { Crosshair = true, Distance = true },
 aimTargets = { Players = true, NPCs = true, Both = true },
 silentTargets = { Players = true, NPCs = true, Both = true },
+triggerMode = { Always = true, ["Aim key"] = true },
+triggerFire = { Hold = true, Tap = true },
 aimMethod = { Auto = true, Camera = true, Mouse = canMoveMouse },
 tracerOrigin = { Bottom = true, Centre = true, Mouse = true },
 }
-local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto", tracerOrigin = "Bottom", aimTargets = "Players", silentTargets = "Players" }
+local defaults = { bodySource = "Auto", boxStyle = "Corners", silentPart = "Head", aimMode = "Hold", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto", tracerOrigin = "Bottom", aimTargets = "Players", silentTargets = "Players", triggerMode = "Always", triggerFire = "Hold" }
 for key, allowed in pairs(choices) do
 if not allowed[Settings[key]] then Settings[key] = defaults[key] end
 end
 if not bindValid(Settings.aimKey, true) then Settings.aimKey = "MouseButton2" end
 if not bindValid(Settings.flyKey, false) then Settings.flyKey = "F" end
 if not bindValid(Settings.allyKey, false) then Settings.allyKey = "Z" end
+if not bindValid(Settings.panicKey, false) then Settings.panicKey = "End" end
 end
 local aimPage = page("aim")
 switch(aimPage, "Enabled", "aimEnabled")
@@ -1155,6 +1183,17 @@ slider(aimPage, "Smoothing", "smoothing", 1, 20, 1, function(v) return v == 1 an
 slider(aimPage, "Prediction", "prediction", 0, 250, 10, function(v) return v == 0 and "Off" or string.format("%d ms", v) end)
 if canMoveMouse then
 segmented(aimPage, "Method", "aimMethod", { "Auto", "Camera", "Mouse" })
+end
+section(aimPage, "Triggerbot")
+if typeof(mouse1click) == "function" or (typeof(mouse1press) == "function" and typeof(mouse1release) == "function") then
+switch(aimPage, "Enabled", "triggerEnabled")
+segmented(aimPage, "Active", "triggerMode", { "Always", "Aim key" })
+segmented(aimPage, "Fire", "triggerFire", { "Hold", "Tap" })
+slider(aimPage, "Reaction delay", "triggerDelay", 0, 300, 10, function(v) return v == 0 and "Instant" or string.format("%d ms", v) end)
+slider(aimPage, "Tap rate", "triggerRate", 2, 20, 1, function(v) return string.format("%d / s", v) end)
+note(aimPage, "Shoots while your crosshair is on an enemy. It uses the aimbot's target and teammate settings. Hold suits automatic weapons, Tap suits semi-automatic ones.")
+else
+note(aimPage, "The triggerbot isn't available because this executor can't click the mouse.")
 end
 local silentPage = page("silent")
 if canHook then
@@ -1186,6 +1225,11 @@ switch(visualsPage, "Lock time of day", "lockTime")
 slider(visualsPage, "Time", "timeOfDay", 0, 24, 0.5, function(v)
 return string.format("%02d:%02d", math.floor(v) % 24, math.floor((v % 1) * 60 + 0.5))
 end)
+section(visualsPage, "Radar")
+switch(visualsPage, "Show radar", "radarEnabled")
+slider(visualsPage, "Range", "radarRange", 50, 1000, 25, function(v) return string.format("%d studs", v) end)
+switch(visualsPage, "Show teammates", "radarTeam")
+note(visualsPage, "Enemies use the ESP colour, teammates are blue, and NPCs are orange when NPC ESP is on. Dots on the edge are out of range.")
 section(visualsPage, "Camera")
 switch(visualsPage, "Custom field of view", "camFovEnabled")
 slider(visualsPage, "Field of view", "camFov", 50, 120, 1, function(v) return string.format("%d°", v) end)
@@ -1222,6 +1266,11 @@ segmented(settingsPage, "Theme", "theme", { "Dark", "Light" }, function() applyT
 swatches(settingsPage, "Accent", "accent", Accents)
 section(settingsPage, "Controls")
 keybind(settingsPage, "Show or hide menu", "menuKey")
+keybind(settingsPage, "Panic", "panicKey")
+note(settingsPage, "Panic hides the menu and turns every feature off. Press it again to turn them back on.")
+section(settingsPage, "Configs")
+switch(settingsPage, "Separate settings per game", "perGame", function() save() end)
+note(settingsPage, "When on, this game keeps its own settings and other games keep theirs.")
 section(settingsPage, "Script")
 local unload -- defined below
 actionButton(settingsPage, "Remove ESP and menu", "Unload", function() unload() end)
@@ -2754,6 +2803,206 @@ end)
 connect(RunService.Stepped, noclipStep)
 connect(RunService.Heartbeat, movementStep)
 end
+local triggerStep, radarStep, releaseTrigger
+do
+local canPress = typeof(mouse1press) == "function" and typeof(mouse1release) == "function"
+local canClick = typeof(mouse1click) == "function" or canPress
+local triggerParams = RaycastParams.new()
+triggerParams.FilterType = Enum.RaycastFilterType.Exclude
+local trig = { held = false, seenAt = nil, lastTap = 0 }
+local function click()
+if typeof(mouse1click) == "function" then
+mouse1click()
+elseif canPress then
+mouse1press()
+task.delay(0.03, mouse1release)
+end
+end
+function releaseTrigger()
+if trig.held and canPress then pcall(mouse1release) end
+trig.held, trig.seenAt = false, nil
+end
+local function enemyFromPart(part)
+local who = Settings.aimTargets
+local node = part
+while node and node ~= workspace do
+if node.ClassName == "Model" then
+local hum = node:FindFirstChildOfClass("Humanoid")
+local player = Players:GetPlayerFromCharacter(node)
+if not player then
+for _, p in ipairs(Players:GetPlayers()) do
+if p ~= LocalPlayer and bodyOf(p) == node then player = p break end
+end
+end
+if player then
+if player == LocalPlayer or who == "NPCs" then return end
+local _, h = bodyOf(player)
+hum = h or hum
+if hum and hum.Health <= 0 then return end
+if Settings.aimTeamCheck and isTeammate(player) then return end
+if not isCombatant(player) then return end
+return player
+end
+if hum then
+if who == "Players" or hum.Health <= 0 then return end
+if Settings.aimTeamCheck and isAllyNpc(node) then return end
+return node
+end
+end
+node = node.Parent
+end
+end
+function triggerStep(camera, mouse)
+local active = Settings.triggerEnabled and canClick and not Holder.Visible
+and not keyCapture and not UserInputService:GetFocusedTextBox()
+and (Settings.triggerMode == "Always" or isBindDown(Settings.aimKey))
+local target
+if active then
+local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+triggerParams.FilterDescendantsInstances = { camera, LocalPlayer.Character }
+local hit = workspace:Raycast(ray.Origin, ray.Direction * 3000, triggerParams)
+target = hit and enemyFromPart(hit.Instance)
+end
+if not target then
+if trig.held then releaseTrigger() end
+trig.seenAt = nil
+return
+end
+local now = os.clock()
+trig.seenAt = trig.seenAt or now
+if now - trig.seenAt < Settings.triggerDelay / 1000 then return end
+if Settings.triggerFire == "Hold" and canPress then
+if not trig.held then
+trig.held = true
+mouse1press()
+end
+elseif now - trig.lastTap >= 1 / math.max(Settings.triggerRate, 1) then
+trig.lastTap = now
+click()
+end
+end
+local RADAR_SIZE = 168
+local radar = new("Frame", {
+Name = "Radar", Size = UDim2.fromOffset(RADAR_SIZE, RADAR_SIZE), BorderSizePixel = 0,
+Position = UDim2.fromOffset(Tokens.space.lg, Tokens.space.lg + 36), BackgroundTransparency = 0.15,
+Visible = false, Parent = espGui,
+}, { round("full") })
+local radarStroke = new("UIStroke", { Thickness = 1, Transparency = 0.2, Parent = radar })
+local function radarLine(horizontal)
+return new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BorderSizePixel = 0,
+BackgroundTransparency = 0.6, Size = horizontal and UDim2.new(1, -16, 0, 1) or UDim2.new(0, 1, 1, -16),
+Parent = radar,
+})
+end
+local radarLines = { radarLine(true), radarLine(false) }
+local ring = new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(0.5, 0.5),
+BackgroundTransparency = 1, Parent = radar,
+}, { round("full") })
+local ringStroke = new("UIStroke", { Thickness = 1, Transparency = 0.7, Parent = ring })
+local me = new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(6, 6),
+BorderSizePixel = 0, Parent = radar,
+}, { round("full") })
+local dots = {}
+local function dot(i)
+local d = dots[i]
+if not d then
+d = new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(7, 7), BorderSizePixel = 0,
+ZIndex = 2, Parent = radar,
+}, { round("full") })
+new("UIStroke", { Thickness = 1, Color = Color3.new(0, 0, 0), Transparency = 0.4, Parent = d })
+dots[i] = d
+end
+return d
+end
+local TEAMMATE_DOT = Color3.fromRGB(120, 200, 255)
+local NPC_DOT = Color3.fromRGB(255, 170, 60)
+function radarStep(camera)
+local on = Settings.radarEnabled
+radar.Visible = on
+if not on then return end
+radar.BackgroundColor3 = P.bg
+radarStroke.Color = P.border
+ringStroke.Color = P.border
+for _, l in ipairs(radarLines) do l.BackgroundColor3 = P.border end
+me.BackgroundColor3 = P.accent
+local cf = camera.CFrame
+local look = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+if look.Magnitude < 1e-3 then look = Vector3.new(0, 0, -1) end
+look = look.Unit
+local right = Vector3.new(-look.Z, 0, look.X)
+local myChar = LocalPlayer.Character
+local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
+local centre = myRoot and myRoot.Position or cf.Position
+local half = RADAR_SIZE / 2 - 6
+local scale = half / Settings.radarRange
+local enemyColour = EspColours[Settings.espColour][2]
+local used = 0
+local function place(model, colour)
+local root = model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head"))
+if not (root and root:IsA("BasePart")) then return end
+local rel = root.Position - centre
+local x, y = rel:Dot(right) * scale, -rel:Dot(look) * scale
+local len = math.sqrt(x * x + y * y)
+local edge = len > half
+if edge then x, y = x / len * half, y / len * half end
+used += 1
+local d = dot(used)
+d.Position = UDim2.new(0.5, x, 0.5, y)
+d.BackgroundColor3 = colour
+d.BackgroundTransparency = edge and 0.55 or 0
+d.Visible = true
+end
+for _, p in ipairs(Players:GetPlayers()) do
+if p ~= LocalPlayer then
+local char, hum = bodyOf(p)
+if char and not (hum and hum.Health <= 0) then
+local mate = isTeammate(p)
+if not (mate and Settings.radarTeam == false) then
+local colour = mate and TEAMMATE_DOT
+or ((Settings.teamColour and p.Team) and p.TeamColor.Color or enemyColour)
+place(char, colour)
+end
+end
+end
+end
+if Settings.npcEsp then
+for _, model in ipairs(npcModels) do
+if not (Settings.radarTeam == false and isAllyNpc(model)) then
+place(model, isAllyNpc(model) and TEAMMATE_DOT or NPC_DOT)
+end
+end
+end
+for i = used + 1, #dots do dots[i].Visible = false end
+end
+local PANIC_KEYS = {
+"enabled", "aimEnabled", "silentEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
+"noclip", "clickTp", "showModules",
+}
+local panicSaved
+connect(UserInputService.InputBegan, function(input)
+if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
+if inputName(input) ~= Settings.panicKey then return end
+if panicSaved then
+for k, v in pairs(panicSaved) do Settings[k] = v end
+panicSaved = nil
+else
+panicSaved = {}
+for _, k in ipairs(PANIC_KEYS) do
+panicSaved[k] = Settings[k]
+Settings[k] = false
+end
+setMenuVisible(false)
+releaseTrigger()
+end
+save()
+applyTheme() -- re-renders every switch from Settings
+end)
+end
 RunService:BindToRenderStep(RENDER_STEP, Enum.RenderPriority.Camera.Value + 1, function(dt)
 local camera = workspace.CurrentCamera
 if not camera then return end
@@ -2761,6 +3010,8 @@ local mouse = UserInputService:GetMouseLocation()
 visualsStep(camera, mouse)
 silentStep(camera, mouse)
 aimStep(camera, mouse, dt)
+triggerStep(camera, mouse)
+radarStep(camera)
 espStep() -- last, so boxes use this frame's final camera and never trail behind
 end)
 do
@@ -2806,6 +3057,8 @@ end
 add(Settings.enabled, "ESP")
 add(Settings.aimEnabled, "Aimbot", Settings.aimMode)
 add(canHook and Settings.silentEnabled, "Silent aim", string.format("%d%%", Settings.hitChance))
+add(Settings.triggerEnabled, "Triggerbot", Settings.triggerFire)
+add(Settings.radarEnabled, "Radar", string.format("%d", Settings.radarRange))
 add(Settings.fullbright, "Fullbright")
 add(Settings.noFog, "No fog")
 add(Settings.lockTime, "Lock time")
@@ -2854,6 +3107,7 @@ unload = function()
 pcall(function() RunService:UnbindFromRenderStep(RENDER_STEP) end)
 hookState.alive = false
 silent.active = false
+pcall(releaseTrigger)
 stopFly(select(2, localCharacter()))
 for part in pairs(noclipped) do
 if part.Parent then part.CanCollide = true end
