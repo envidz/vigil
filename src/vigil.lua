@@ -130,6 +130,13 @@ local Settings = {
 	panicKey = "End",
 	perGame = false,
 	showLoader = true,
+	antiAfk = false,
+	freecamKey = "P",
+	freecamSpeed = 60,
+	spin = false,
+	spinSpeed = 8,
+	hitmarker = false,
+	hitSound = true,
 	bodySource = "Auto",
 	aimEnabled = false,
 	aimKey = "MouseButton2",
@@ -380,7 +387,7 @@ local menuGui = new("ScreenGui", {
 --------------------------------------------------------------------------------
 -- Icons (drawn from primitives so they share one outline style and stroke)
 --------------------------------------------------------------------------------
-local iconEye, iconSliders, iconCrosshair, iconTarget, iconSun, iconChevrons, iconClose
+local iconEye, iconSliders, iconCrosshair, iconTarget, iconSun, iconChevrons, iconClose, iconPeople
 do
 
 local ICON_STROKE = 1.6
@@ -501,6 +508,21 @@ function iconChevrons()
 		end
 	end
 	return root, function(c) for _, a in ipairs(arms) do a.BackgroundColor3 = c end end
+end
+
+function iconPeople()
+	local root = new("Frame", { Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
+	local head = new("Frame", {
+		Size = UDim2.fromOffset(7, 7), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(10, 2),
+		BackgroundTransparency = 1, Parent = root,
+	}, { round("full") })
+	local body = new("Frame", {
+		Size = UDim2.fromOffset(14, 7), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(10, 12),
+		BackgroundTransparency = 1, Parent = root,
+	}, { round(4) })
+	local a = new("UIStroke", { Thickness = ICON_STROKE, Parent = head })
+	local b = new("UIStroke", { Thickness = ICON_STROKE, Parent = body })
+	return root, function(c) a.Color = c; b.Color = c end
 end
 
 function iconClose()
@@ -677,11 +699,11 @@ end
 --------------------------------------------------------------------------------
 -- Controls
 --------------------------------------------------------------------------------
-local iconButton, section, row, switchRenders, switch, note, slider, segmented, swatches, keyCapture, consumedInput, aimToggled, keybind, actionButton, buttonRow
+local iconButton, section, row, switchRenders, switch, note, slider, segmented, swatches, keyCapture, consumedInput, aimToggled, keybind, actionButton, buttonRow, nextOrder
 do
 
 local order = 0
-local function nextOrder()
+function nextOrder()
 	order += 1
 	return order
 end
@@ -1098,6 +1120,7 @@ local tabs = {
 	{ id = "silent", title = "Silent aim", icon = iconTarget },
 	{ id = "visuals", title = "Visuals", icon = iconSun },
 	{ id = "movement", title = "Movement", icon = iconChevrons },
+	{ id = "players", title = "Players", icon = iconPeople },
 	{ id = "settings", title = "Settings", icon = iconSliders, bottom = true },
 }
 
@@ -1327,6 +1350,7 @@ do -- repair saved values that no longer fit this executor or the option lists
 	if not bindValid(Settings.flyKey, false) then Settings.flyKey = "F" end
 	if not bindValid(Settings.allyKey, false) then Settings.allyKey = "Z" end
 	if not bindValid(Settings.panicKey, false) then Settings.panicKey = "End" end
+	if not bindValid(Settings.freecamKey, false) then Settings.freecamKey = "P" end
 end
 
 local aimPage = page("aim")
@@ -2600,8 +2624,9 @@ end
 --------------------------------------------------------------------------------
 -- Targeting (shared by aimbot and silent aim)
 --------------------------------------------------------------------------------
-local RENDER_STEP, findTarget, circle, placeCircle
+local RENDER_STEP, findTarget, circle, placeCircle, focus
 do
+focus = {} -- focus.target: a player picked in the player list, preferred whenever valid
 
 RENDER_STEP = "VigilRender"
 
@@ -2664,6 +2689,13 @@ function findTarget(camera, mouse, cfg, current)
 	local function scoreOf(screenDist, worldDist, seen)
 		-- targets that can be hit always rank ahead of ones behind walls
 		return (cfg.priority == "Distance" and worldDist or screenDist) + (seen and 0 or 1e7)
+	end
+
+	-- a focused player wins whenever they can be targeted at all
+	local f = focus.target
+	if f and f.Parent and (cfg.targets or "Players") ~= "NPCs" then
+		local part = evaluate(f, camera, mouse, cfg)
+		if part then return f, part end
 	end
 
 	-- the current target is kept unless it is gone, or has been behind cover for a moment
@@ -3453,7 +3485,7 @@ end
 local PANIC_KEYS = {
 	"enabled", "aimEnabled", "silentEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
-	"noclip", "clickTp", "showModules",
+	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
 local panicSaved
 
@@ -3478,6 +3510,639 @@ end)
 end
 
 --------------------------------------------------------------------------------
+-- Player list, server tools, configs, waypoints, hitmarker, freecam and spin
+--------------------------------------------------------------------------------
+local features, freecamStep
+do
+features = { kills = 0, freecam = false, spectate = nil }
+
+local TeleportService = game:GetService("TeleportService")
+local SoundService = game:GetService("SoundService")
+
+local function rootOf(model)
+	local r = model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head"))
+	return (r and r:IsA("BasePart")) and r or nil
+end
+
+local function myRoot()
+	return rootOf(LocalPlayer.Character)
+end
+
+local function readJson(path)
+	if not canSave then return nil end
+	local ok, data = pcall(function()
+		return isfile(path) and HttpService:JSONDecode(readfile(path)) or nil
+	end)
+	return ok and type(data) == "table" and data or nil
+end
+
+local function writeJson(path, data)
+	if canSave then pcall(writefile, path, HttpService:JSONEncode(data)) end
+end
+
+local clipboard = (typeof(setclipboard) == "function" and setclipboard)
+	or (typeof(toclipboard) == "function" and toclipboard) or nil
+
+-- Shared building blocks ------------------------------------------------------
+
+-- A text field on the right of a row
+local function inputRow(page, label, placeholder)
+	local r = row(page, label)
+	local box = new("TextBox", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(200, Tokens.size.control),
+		Text = "", PlaceholderText = placeholder, ClearTextOnFocus = false, FontFace = Tokens.font,
+		TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+		BorderSizePixel = 0, Parent = r,
+	}, { round(Tokens.radius.md), padding(0, 10) })
+	bind(box, "BackgroundColor3", "raised")
+	bind(box, "TextColor3", "text")
+	bind(box, "PlaceholderColor3", "muted")
+	return box
+end
+
+-- A list that is rebuilt from data: each entry is a title, a detail line and buttons
+local function listBox(page)
+	return new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		LayoutOrder = nextOrder(), Parent = page,
+	}, { new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }) })
+end
+
+local function clearList(box)
+	for _, child in ipairs(box:GetChildren()) do
+		if not child:IsA("UIListLayout") then child:Destroy() end
+	end
+end
+
+local function emptyLine(box, text)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = Tokens.text.small,
+		TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = P.muted, Text = text, Parent = box,
+	})
+end
+
+-- buttons = { { text, onClick, danger? }, ... }; returns the detail label
+local function listRow(box, order, titleText, detailText, buttons)
+	local r = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, LayoutOrder = order, Parent = box,
+	})
+	new("TextLabel", {
+		Size = UDim2.new(1, -230, 0, 20), Position = UDim2.fromOffset(0, 4), BackgroundTransparency = 1,
+		FontFace = Tokens.font, TextSize = Tokens.text.body, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = P.text, Text = titleText, Parent = r,
+	})
+	local detail = new("TextLabel", {
+		Size = UDim2.new(1, -230, 0, 16), Position = UDim2.fromOffset(0, 24), BackgroundTransparency = 1,
+		FontFace = Tokens.font, TextSize = Tokens.text.small, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = P.muted, Text = detailText or "", Parent = r,
+	})
+	local holder = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 26), BackgroundTransparency = 1, Parent = r,
+	}, { new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder,
+	}) })
+	for i, b in ipairs(buttons) do
+		local btn = new("TextButton", {
+			AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = b[1], FontFace = Tokens.font,
+			TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+			BackgroundColor3 = P.raised, TextColor3 = b[3] and P.danger or (b[4] and P.accent or P.text), Parent = holder,
+		}, { round(Tokens.radius.sm), padding(0, 9) })
+		connect(btn.MouseEnter, function() btn.BackgroundColor3 = P.hover end)
+		connect(btn.MouseLeave, function() btn.BackgroundColor3 = P.raised end)
+		connect(btn.Activated, b[2])
+	end
+	return detail
+end
+
+-- Freecam and spectate ----------------------------------------------------------
+local fc = { pos = Vector3.zero, yaw = 0, pitch = 0, anchored = nil, mouseLocked = false }
+
+local function cameraSubjectHome()
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	local target = features.spectate
+	local _, hum = target and bodyOf(target)
+	if not hum then
+		local char = LocalPlayer.Character
+		hum = char and char:FindFirstChildOfClass("Humanoid")
+	end
+	if hum then camera.CameraSubject = hum end
+end
+
+local function setFreecam(on)
+	if on == features.freecam then return end
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	features.freecam = on
+	local root = myRoot()
+	if on then
+		local cf = camera.CFrame
+		fc.pos = cf.Position
+		local x, y = cf:ToOrientation()
+		fc.pitch, fc.yaw = x, y
+		if root then
+			fc.anchored = root.Anchored
+			root.Anchored = true
+		end
+		camera.CameraType = Enum.CameraType.Scriptable
+		toast("Freecam on. Hold right mouse to look, WASD, E and Q to move, Shift for speed.")
+	else
+		if root and fc.anchored ~= nil then root.Anchored = fc.anchored end
+		fc.anchored = nil
+		if fc.mouseLocked then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+			fc.mouseLocked = false
+		end
+		camera.CameraType = Enum.CameraType.Custom
+		cameraSubjectHome()
+	end
+end
+
+function freecamStep(camera, dt)
+	if not features.freecam then return end
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		fc.mouseLocked = true
+		local d = UserInputService:GetMouseDelta()
+		fc.yaw -= d.X * 0.004
+		fc.pitch = math.clamp(fc.pitch - d.Y * 0.004, -1.5, 1.5)
+	elseif fc.mouseLocked then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		fc.mouseLocked = false
+	end
+	local rot = CFrame.fromOrientation(fc.pitch, fc.yaw, 0)
+	if not UserInputService:GetFocusedTextBox() then
+		local k = function(code) return UserInputService:IsKeyDown(code) and 1 or 0 end
+		local move = Vector3.new(
+			k(Enum.KeyCode.D) - k(Enum.KeyCode.A),
+			k(Enum.KeyCode.E) - k(Enum.KeyCode.Q),
+			k(Enum.KeyCode.S) - k(Enum.KeyCode.W)
+		)
+		if move.Magnitude > 0 then
+			local speed = Settings.freecamSpeed * (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and 3 or 1)
+			fc.pos += rot:VectorToWorldSpace(move.Unit) * speed * dt
+		end
+	end
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.new(fc.pos) * rot
+end
+
+local renderPlayers -- set below
+
+local function setSpectate(player)
+	features.spectate = player
+	if not features.freecam then cameraSubjectHome() end
+	if player then toast("Spectating " .. player.DisplayName) end
+	if renderPlayers then renderPlayers() end
+end
+
+connect(RunService.Heartbeat, function()
+	local target = features.spectate
+	if not target then return end
+	if target.Parent ~= Players then
+		setSpectate(nil)
+		return
+	end
+	-- follow respawns
+	local camera = workspace.CurrentCamera
+	local _, hum = bodyOf(target)
+	if camera and hum and camera.CameraSubject ~= hum and not features.freecam then camera.CameraSubject = hum end
+end)
+
+connect(UserInputService.InputBegan, function(input)
+	if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
+	if inputName(input) == Settings.freecamKey then setFreecam(not features.freecam) end
+end)
+
+-- Players page ---------------------------------------------------------------------
+local playersPage = page("players")
+
+section(playersPage, "Server")
+switch(playersPage, "Anti-AFK", "antiAfk")
+
+local function rejoin()
+	toast("Rejoining...")
+	pcall(function()
+		if #Players:GetPlayers() <= 1 then
+			TeleportService:Teleport(game.PlaceId, LocalPlayer)
+		else
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+		end
+	end)
+end
+
+local hopping = false
+local function serverHop()
+	if hopping then return end
+	hopping = true
+	toast("Looking for another server...")
+	task.spawn(function()
+		local choices, cursor = {}, nil
+		for _ = 1, 3 do
+			local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
+				.. (cursor and ("&cursor=" .. cursor) or "")
+			local ok, body = pcall(function() return game:HttpGet(url) end)
+			if not ok then break end
+			local okJson, data = pcall(function() return HttpService:JSONDecode(body) end)
+			if not okJson or type(data) ~= "table" or type(data.data) ~= "table" then break end
+			for _, s in ipairs(data.data) do
+				if s.id ~= game.JobId and tonumber(s.playing) and tonumber(s.maxPlayers) and s.playing < s.maxPlayers then
+					table.insert(choices, s.id)
+				end
+			end
+			cursor = data.nextPageCursor
+			if #choices >= 10 or not cursor then break end
+		end
+		hopping = false
+		if #choices == 0 then
+			toast("No other server with space was found")
+			return
+		end
+		toast("Joining another server...")
+		pcall(function()
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, choices[math.random(#choices)], LocalPlayer)
+		end)
+	end)
+end
+
+buttonRow(playersPage, "Server", { { "Rejoin", rejoin }, { "Server hop", serverHop } })
+note(playersPage, "Anti-AFK stops the 20 minute idle kick. Server hop joins a random other server of this game that has space.")
+
+connect(LocalPlayer.Idled, function()
+	if not Settings.antiAfk then return end
+	pcall(function()
+		local vu = game:GetService("VirtualUser")
+		vu:CaptureController()
+		vu:ClickButton2(Vector2.new())
+	end)
+end)
+
+section(playersPage, "Players")
+local playerList = listBox(playersPage)
+local detailLabels = {}
+
+local function teamText(p)
+	local mark = allyMarks[p]
+	if mark == true then return "Teammate" end
+	if mark == false then return "Enemy" end
+	return isTeammate(p) and "Auto: team" or "Auto: enemy"
+end
+
+local function detailOf(p)
+	local char, hum = bodyOf(p)
+	local parts = {}
+	if hum then table.insert(parts, string.format("%d hp", math.floor(hum.Health + 0.5))) end
+	local a, b = rootOf(char), myRoot()
+	if a and b then table.insert(parts, string.format("%d m", math.floor((a.Position - b.Position).Magnitude + 0.5))) end
+	if p.Team then table.insert(parts, p.Team.Name) end
+	if p.DisplayName ~= p.Name then table.insert(parts, "@" .. p.Name) end
+	return #parts > 0 and table.concat(parts, "  ·  ") or "No character"
+end
+
+function renderPlayers()
+	clearList(playerList)
+	table.clear(detailLabels)
+	local list = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then table.insert(list, p) end
+	end
+	table.sort(list, function(a, b) return a.DisplayName:lower() < b.DisplayName:lower() end)
+	if #list == 0 then
+		emptyLine(playerList, "No other players in this server.")
+		return
+	end
+	for i, p in ipairs(list) do
+		local spectating = features.spectate == p
+		local focused = focus.target == p
+		detailLabels[p] = listRow(playerList, i, p.DisplayName, detailOf(p), {
+			{ spectating and "Stop" or "Spectate", function() setSpectate(not spectating and p or nil) end, false, spectating },
+			{ "Go to", function()
+				local a, b = rootOf((bodyOf(p))), myRoot()
+				if a and b then
+					b.CFrame = a.CFrame * CFrame.new(0, 0, 4)
+				else
+					toast(p.DisplayName .. " has no character right now")
+				end
+			end },
+			{ teamText(p), function()
+				local mark = allyMarks[p]
+				if mark == nil then allyMarks[p] = true elseif mark == true then allyMarks[p] = false else allyMarks[p] = nil end
+				renderPlayers()
+			end },
+			{ focused and "Unfocus" or "Focus", function()
+				focus.target = (not focused) and p or nil
+				if not focused then toast("Aimbot and silent aim prefer " .. p.DisplayName) end
+				renderPlayers()
+			end, false, focused },
+		})
+	end
+end
+note(playersPage, "Focus makes the aimbot and silent aim pick that player first whenever they are a valid target. The team button cycles automatic, teammate and enemy.")
+
+connect(Players.PlayerAdded, function() renderPlayers() end)
+connect(Players.PlayerRemoving, function(p)
+	if focus.target == p then focus.target = nil end
+	task.defer(renderPlayers)
+end)
+onTheme(function() renderPlayers() end)
+
+local detailElapsed = 0
+connect(RunService.Heartbeat, function(dt)
+	detailElapsed += dt
+	if detailElapsed < 0.5 then return end
+	detailElapsed = 0
+	if not (Holder.Visible and pages.players.Visible) then return end
+	for p, label in pairs(detailLabels) do
+		if label.Parent then label.Text = detailOf(p) end
+	end
+end)
+
+-- Configs (Settings page) ------------------------------------------------------------
+local CONFIG_FILE = "Vigil-configs.json"
+local SKIP = { perGame = true, showLoader = true }
+local configs = readJson(CONFIG_FILE) or {}
+
+local function applyValues(values, label)
+	local before = table.clone(Settings)
+	local count = 0
+	for k, v in pairs(values) do
+		if Settings[k] ~= nil and not SKIP[k] and typeof(v) == typeof(Settings[k]) then
+			Settings[k] = v
+			count += 1
+		end
+	end
+	if count == 0 then
+		toast("That config has no settings Vigil knows")
+		return
+	end
+	save()
+	applyTheme()
+	toast(label, "Undo", function()
+		for k, v in pairs(before) do Settings[k] = v end
+		save()
+		applyTheme()
+	end)
+end
+
+local function snapshot()
+	local out = {}
+	for k, v in pairs(Settings) do
+		if not SKIP[k] then out[k] = v end
+	end
+	return out
+end
+
+section(settingsPage, "Saved configs")
+local nameBox = inputRow(settingsPage, "Name", "Legit, Arsenal, ...")
+local configList
+local function renderConfigs()
+	clearList(configList)
+	local names = {}
+	for name in pairs(configs) do table.insert(names, name) end
+	table.sort(names, function(a, b) return a:lower() < b:lower() end)
+	if #names == 0 then
+		emptyLine(configList, "No saved configs yet.")
+		return
+	end
+	for i, name in ipairs(names) do
+		local count = 0
+		for _ in pairs(configs[name]) do count += 1 end
+		local buttons = { { "Load", function() applyValues(configs[name], "Loaded " .. name) end } }
+		if clipboard then
+			table.insert(buttons, { "Copy", function()
+				pcall(clipboard, HttpService:JSONEncode(configs[name]))
+				toast(name .. " copied to the clipboard")
+			end })
+		end
+		table.insert(buttons, { "Delete", function()
+			local removed = configs[name]
+			configs[name] = nil
+			writeJson(CONFIG_FILE, configs)
+			renderConfigs()
+			toast("Deleted " .. name, "Undo", function()
+				configs[name] = removed
+				writeJson(CONFIG_FILE, configs)
+				renderConfigs()
+			end)
+		end, true })
+		listRow(configList, i, name, string.format("%d settings", count), buttons)
+	end
+end
+buttonRow(settingsPage, "Save current settings", { { "Save", function()
+	local name = nameBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+	if name == "" then
+		toast("Type a name for the config first")
+		return
+	end
+	name = name:sub(1, 32)
+	local existed = configs[name] ~= nil
+	configs[name] = snapshot()
+	writeJson(CONFIG_FILE, configs)
+	nameBox.Text = ""
+	renderConfigs()
+	toast((existed and "Updated " or "Saved ") .. name)
+end } })
+configList = listBox(settingsPage)
+
+local importBox = inputRow(settingsPage, "Import", "Paste a config here")
+local shareButtons = { { "Import", function()
+	local ok, data = pcall(function() return HttpService:JSONDecode(importBox.Text) end)
+	if not ok or type(data) ~= "table" then
+		toast("That isn't a Vigil config")
+		return
+	end
+	importBox.Text = ""
+	applyValues(data, "Imported config applied")
+end } }
+if clipboard then
+	table.insert(shareButtons, 1, { "Copy current", function()
+		pcall(clipboard, HttpService:JSONEncode(snapshot()))
+		toast("Current settings copied to the clipboard")
+	end })
+end
+buttonRow(settingsPage, "Share", shareButtons)
+note(settingsPage, canSave and "Saved configs are kept in Vigil-configs.json. Copy one to share it, and paste a friend's into Import."
+	or "This executor can't write files, so saved configs only last until you leave.")
+onTheme(function() renderConfigs() end)
+
+-- Waypoints (Movement page) -------------------------------------------------------------
+local WAYPOINT_FILE = "Vigil-waypoints.json"
+local PLACE = tostring(game.PlaceId)
+local waypointsAll = readJson(WAYPOINT_FILE) or {}
+waypointsAll[PLACE] = type(waypointsAll[PLACE]) == "table" and waypointsAll[PLACE] or {}
+
+section(movementPage, "Waypoints")
+local wpBox = inputRow(movementPage, "Name", "Spawn, shop, ...")
+local wpList
+local function renderWaypoints()
+	clearList(wpList)
+	local list = waypointsAll[PLACE]
+	if #list == 0 then
+		emptyLine(wpList, "No waypoints in this game yet.")
+		return
+	end
+	for i, wp in ipairs(list) do
+		local b = myRoot()
+		local dist = b and string.format("%d m away", math.floor((Vector3.new(wp.x, wp.y, wp.z) - b.Position).Magnitude + 0.5)) or ""
+		listRow(wpList, i, wp.name, dist, {
+			{ "Go", function()
+				local root = myRoot()
+				if not root then return end
+				root.CFrame = CFrame.new(wp.x, wp.y, wp.z) * (root.CFrame - root.CFrame.Position)
+				root.AssemblyLinearVelocity = Vector3.zero
+				renderWaypoints()
+			end },
+			{ "Delete", function()
+				table.remove(list, i)
+				writeJson(WAYPOINT_FILE, waypointsAll)
+				renderWaypoints()
+			end, true },
+		})
+	end
+end
+buttonRow(movementPage, "Save where you stand", { { "Save", function()
+	local root = myRoot()
+	if not root then
+		toast("You need a character to save a waypoint")
+		return
+	end
+	local list = waypointsAll[PLACE]
+	local name = wpBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+	if name == "" then name = "Waypoint " .. (#list + 1) end
+	local p = root.Position
+	table.insert(list, { name = name:sub(1, 32), x = p.X, y = p.Y, z = p.Z })
+	writeJson(WAYPOINT_FILE, waypointsAll)
+	wpBox.Text = ""
+	renderWaypoints()
+end } })
+wpList = listBox(movementPage)
+note(movementPage, "Waypoints are kept per game.")
+onTheme(function() renderWaypoints() end)
+
+-- Freecam and spin (Movement page) ---------------------------------------------------------
+section(movementPage, "Freecam")
+keybind(movementPage, "Freecam key", "freecamKey")
+slider(movementPage, "Freecam speed", "freecamSpeed", 10, 300, 5, function(v) return string.format("%d studs/s", v) end)
+note(movementPage, "Your character stays frozen where it is. Hold right mouse to look around, WASD, E and Q to move, Shift to go faster.")
+
+section(movementPage, "Spin")
+switch(movementPage, "Spinbot", "spin")
+slider(movementPage, "Spin speed", "spinSpeed", 1, 20, 1, function(v) return string.format("%d turns/s", v) end)
+
+local spinning = false
+connect(RunService.Heartbeat, function(dt)
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = rootOf(char)
+	local want = Settings.spin and not features.freecam and hum and root and hum.Health > 0
+	if want then
+		hum.AutoRotate = false
+		root.CFrame *= CFrame.Angles(0, math.rad(Settings.spinSpeed * 360 * dt), 0)
+		spinning = true
+	elseif spinning then
+		spinning = false
+		if hum then hum.AutoRotate = true end
+	end
+end)
+
+-- Hitmarker and hit sound (Visuals page) -------------------------------------------------------
+section(visualsPage, "Hitmarker")
+switch(visualsPage, "Show hitmarker", "hitmarker")
+switch(visualsPage, "Hit sound", "hitSound")
+note(visualsPage, "Shows an X and plays a click when someone you are shooting at loses health, red for a kill. Kills are counted in the module list.")
+
+local markLines = {}
+for i = 1, 4 do
+	markLines[i] = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(9, 2), BorderSizePixel = 0,
+		BackgroundTransparency = 1, Rotation = (i % 2 == 0) and -45 or 45, ZIndex = 20, Parent = espGui,
+	})
+end
+local hitSound = new("Sound", { SoundId = "rbxasset://sounds/electronicpingshort.wav", Volume = 0.6, Parent = espGui })
+
+local markToken = 0
+local function showMark(kill)
+	markToken += 1
+	local mine = markToken
+	local m = UserInputService:GetMouseLocation()
+	local colour = kill and Color3.fromRGB(255, 70, 70) or Color3.new(1, 1, 1)
+	local gap = kill and 9 or 7
+	for i, l in ipairs(markLines) do
+		local sx = (i == 1 or i == 4) and 1 or -1
+		local sy = (i <= 2) and -1 or 1
+		l.Position = UDim2.fromOffset(m.X + sx * gap, m.Y + sy * gap) -- espGui ignores the inset, so mouse coordinates line up
+		l.BackgroundColor3 = colour
+		l.Rotation = (sx * sy > 0) and 45 or -45
+		l.Size = UDim2.fromOffset(kill and 12 or 9, 2)
+		l.BackgroundTransparency = 0
+		tween(l, { BackgroundTransparency = 1 }, 0.35)
+	end
+	task.delay(0.4, function()
+		if mine ~= markToken then return end
+		for _, l in ipairs(markLines) do l.BackgroundTransparency = 1 end
+	end)
+	if Settings.hitSound then
+		hitSound.PlaybackSpeed = kill and 1.4 or 1
+		if not pcall(function() SoundService:PlayLocalSound(hitSound) end) then pcall(function() hitSound:Play() end) end
+	end
+end
+
+local lastHealth = setmetatable({}, { __mode = "k" })
+local lastFire = 0
+connect(RunService.Heartbeat, function()
+	if not Settings.hitmarker then
+		table.clear(lastHealth)
+		return
+	end
+	local now = os.clock()
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then lastFire = now end
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	local mouse = UserInputService:GetMouseLocation()
+	local firing = now - lastFire < 0.6
+
+	local function check(model, hum)
+		if not hum then return end
+		local h = hum.Health
+		local prev = lastHealth[hum]
+		lastHealth[hum] = h
+		if not prev or h >= prev - 0.01 or not firing then return end
+		-- only count damage to someone near where we are aiming
+		local root = rootOf(model)
+		if not root then return end
+		local screen, onScreen = camera:WorldToViewportPoint(root.Position)
+		if not onScreen or (Vector2.new(screen.X, screen.Y) - mouse).Magnitude > 260 then return end
+		local kill = prev > 0 and h <= 0
+		if kill then features.kills += 1 end
+		showMark(kill)
+	end
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local char, hum = bodyOf(p)
+			check(char, hum)
+		end
+	end
+	for i, model in ipairs(npcModels) do
+		if i > 150 then break end
+		check(model, model:FindFirstChildOfClass("Humanoid"))
+	end
+end)
+
+features.cleanup = function()
+	setFreecam(false)
+	features.spectate = nil
+	cameraSubjectHome()
+	if spinning then
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.AutoRotate = true end
+	end
+end
+end
+
+--------------------------------------------------------------------------------
 -- Per-frame driver, bound after the camera updates
 --------------------------------------------------------------------------------
 
@@ -3489,6 +4154,7 @@ RunService:BindToRenderStep(RENDER_STEP, Enum.RenderPriority.Camera.Value + 1, f
 	silentStep(camera, mouse)
 	aimStep(camera, mouse, dt)
 	triggerStep(camera, mouse)
+	freecamStep(camera, dt)
 	radarStep(camera)
 	espStep() -- last, so boxes use this frame's final camera and never trail behind
 end)
@@ -3555,6 +4221,12 @@ local function activeModules()
 	add(Settings.fly, "Fly", string.format("%d", Settings.flySpeed))
 	add(Settings.noclip, "Noclip")
 	add(Settings.clickTp, "Click teleport")
+	add(Settings.spin, "Spinbot", string.format("%d", Settings.spinSpeed))
+	add(Settings.hitmarker, "Hitmarker", string.format("%d kills", features.kills))
+	add(Settings.antiAfk, "Anti-AFK")
+	add(features.freecam, "Freecam")
+	add(features.spectate ~= nil, "Spectate", features.spectate and features.spectate.DisplayName)
+	add(focus.target ~= nil, "Focus", focus.target and focus.target.DisplayName)
 	-- longest first, the usual shape for a corner list
 	table.sort(list, function(a, b)
 		local la, lb = #a[1] + #(a[2] or ""), #b[1] + #(b[2] or "")
@@ -3755,6 +4427,7 @@ unload = function()
 	hookState.alive = false
 	silent.active = false
 	pcall(releaseTrigger)
+	pcall(features.cleanup)
 	stopFly(select(2, localCharacter()))
 	for part in pairs(noclipped) do
 		if part.Parent then part.CanCollide = true end
