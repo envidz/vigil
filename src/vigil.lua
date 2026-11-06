@@ -3633,18 +3633,25 @@ function runLoader()
 	local cardScale = new("UIScale", { Scale = 0.96, Parent = card })
 
 	-- wordmark
-	local mark = new("Frame", {
-		Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(0, 8), BackgroundColor3 = P.accent,
-		BorderSizePixel = 0, Parent = card,
-	}, { round("full") })
-	new("TextLabel", {
-		Text = "Vigil", FontFace = Tokens.fontStrong, TextSize = 24, TextColor3 = P.text,
-		TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(18, 0), Size = UDim2.new(1, -18, 0, 26), Parent = card,
-	})
-	new("TextLabel", {
+	-- each letter sits in its own clipped slot so it can rise into place
+	local word = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Parent = card,
+	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder }) })
+	local letters = {}
+	for i, ch in ipairs({ "V", "i", "g", "i", "l" }) do
+		local slot = new("Frame", {
+			Size = UDim2.fromOffset(0, 28), AutomaticSize = Enum.AutomaticSize.X, ClipsDescendants = true,
+			BackgroundTransparency = 1, LayoutOrder = i, Parent = word,
+		})
+		letters[i] = new("TextLabel", {
+			Text = ch, FontFace = Tokens.fontStrong, TextSize = 24, TextColor3 = P.text,
+			AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 28), Position = UDim2.fromOffset(0, 22),
+			TextTransparency = 1, BackgroundTransparency = 1, Parent = slot,
+		})
+	end
+	local sub = new("TextLabel", {
 		Text = executorName(), FontFace = Tokens.font, TextSize = Tokens.text.small, TextColor3 = P.muted,
-		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, TextTransparency = 1,
 		BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 0, 18), Parent = card,
 	})
 
@@ -3668,15 +3675,45 @@ function runLoader()
 	local fill = new("Frame", {
 		Size = UDim2.fromScale(0, 1), BackgroundColor3 = P.accent, BorderSizePixel = 0, Parent = track,
 	}, { round("full") })
+	-- a soft highlight that sweeps along the filled part of the bar
+	local shine = new("UIGradient", {
+		Color = ColorSequence.new(Color3.new(1, 1, 1)),
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.4, 0),
+			NumberSequenceKeypoint.new(0.5, 0.45), NumberSequenceKeypoint.new(0.6, 0), NumberSequenceKeypoint.new(1, 0),
+		}),
+		Offset = Vector2.new(-1, 0), Parent = fill,
+	})
 
 	local alive = function() return loaderGui and loaderGui.Parent ~= nil end
 	local fast = reducedMotion
+
+	if not fast then
+		task.spawn(function()
+			while alive() do
+				shine.Offset = Vector2.new(-1, 0)
+				TweenService:Create(shine, TweenInfo.new(0.7, Enum.EasingStyle.Sine), { Offset = Vector2.new(1, 0) }):Play()
+				task.wait(0.9)
+			end
+		end)
+	end
 
 	task.spawn(function()
 		tween(backdrop, { BackgroundTransparency = 0.6 }, 0.25)
 		tween(card, { GroupTransparency = 0 }, 0.25)
 		tween(cardScale, { Scale = 1 }, 0.3)
-		task.wait(fast and 0 or 0.25)
+		-- letters rise in one after another, then the executor line fades up
+		for _, l in ipairs(letters) do
+			if fast then
+				l.Position, l.TextTransparency = UDim2.fromOffset(0, 0), 0
+			else
+				TweenService:Create(l, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+					{ Position = UDim2.fromOffset(0, 0), TextTransparency = 0 }):Play()
+				task.wait(0.05)
+			end
+		end
+		tween(sub, { TextTransparency = 0 }, 0.3)
+		task.wait(fast and 0 or 0.2)
 
 		local shown = 0
 		for _, step in ipairs(STEPS) do
