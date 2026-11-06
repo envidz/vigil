@@ -116,6 +116,8 @@ local Settings = {
 	arrows = true,
 	visCheck = false,
 	npcEsp = false,
+	friendsAsTeam = false,
+	allyKey = "Z",
 	bodySource = "Auto",
 	aimEnabled = false,
 	aimKey = "MouseButton2",
@@ -1114,6 +1116,9 @@ switch(espPage, "Glow through walls", "highlight")
 section(espPage, "Filter")
 switch(espPage, "Hide teammates", "teamCheck")
 switch(espPage, "Show NPCs", "npcEsp")
+switch(espPage, "Friends are teammates", "friendsAsTeam")
+keybind(espPage, "Mark teammate", "allyKey")
+note(espPage, "Point at a player or NPC and press the key to cycle it: teammate, enemy, then automatic. Teammates are hidden and ignored by the aimbot and silent aim.")
 switch(espPage, "Dim hidden players", "visCheck")
 segmented(espPage, "Follow", "bodySource", { "Auto", "Visible", "Character" })
 note(espPage, "Some games show a different model from a player's real character. Auto follows the visible one when the real one is hidden.")
@@ -1291,6 +1296,7 @@ do -- repair saved values that no longer fit this executor or the option lists
 	end
 	if not bindValid(Settings.aimKey, true) then Settings.aimKey = "MouseButton2" end
 	if not bindValid(Settings.flyKey, false) then Settings.flyKey = "F" end
+	if not bindValid(Settings.allyKey, false) then Settings.allyKey = "Z" end
 end
 
 local aimPage = page("aim")
@@ -1505,6 +1511,12 @@ end
 -- preview always matches what you see in game.
 --------------------------------------------------------------------------------
 
+-- Teams ------------------------------------------------------------------------
+-- A player or NPC counts as a teammate from, in order: a manual mark (ally key),
+-- Roblox friends (optional), a team tag the game stores in attributes or value
+-- objects, then Roblox Teams / TeamColor. Lobby and free-for-all teams never
+-- count, and one team that holds everyone never counts either.
+
 -- Team names that mean "not fighting" or "everyone for themselves"
 local function teamName(player)
 	return player.Team and string.lower(player.Team.Name) or ""
@@ -1518,41 +1530,216 @@ local function ffaTeam(name)
 		or name:find("everyone") or name:find("neutral")
 end
 
--- Whether the players who are actually fighting are split over more than one team
-local teamCache = { at = -1, split = false }
-local function teamsSplit()
-	local now = os.clock()
-	if now - teamCache.at > 0.5 then
-		teamCache.at = now
-		teamCache.split = false
-		local myTeam = LocalPlayer.Team
-		for _, other in ipairs(Players:GetPlayers()) do
-			if other ~= LocalPlayer and other.Team ~= myTeam and not idleTeam(teamName(other)) then
-				teamCache.split = true
-				break
-			end
+local isTeammate, isAllyNpc, allyMarks
+do
+allyMarks = setmetatable({}, { __mode = "k" }) -- player or NPC model -> true (teammate) / false (enemy)
+
+-- attribute / value names games use for a team
+local TEAM_KEYS = {
+	team = true, teamname = true, teamid = true, teamindex = true, teamnumber = true, teamcolor = true,
+	teamcolour = true, side = true, squad = true, faction = true, alliance = true, allegiance = true,
+	clan = true, party = true, crew = true, army = true, nation = true,
+}
+local NO_TEAM = { [""] = true, none = true, ["nil"] = true, null = true, neutral = true, unassigned = true, nobody = true }
+
+-- Turns any team value into one comparable string, or nil when it means "no team"
+local function teamValue(v)
+	local t = typeof(v)
+	if t == "Instance" then
+		if not v:IsA("Team") then return "i:" .. v:GetFullName() end
+		v, t = v.Name, "string"
+	elseif t == "BrickColor" then
+		return "c:" .. v.Name
+	elseif t == "Color3" then
+		return "c:" .. v:ToHex()
+	elseif t == "EnumItem" then
+		return "e:" .. tostring(v)
+	elseif t == "number" then
+		return "s:" .. tostring(v)
+	end
+	if t ~= "string" then return end
+	local s = string.lower(v):gsub("%s+", "")
+	if NO_TEAM[s] then return end
+	return "s:" .. s
+end
+
+local function readTag(inst)
+	if not inst then return end
+	for key, v in pairs(inst:GetAttributes()) do
+		if TEAM_KEYS[string.lower(key)] then
+			local tag = teamValue(v)
+			if tag then return tag end
 		end
 	end
+	for _, child in ipairs(inst:GetChildren()) do
+		if child:IsA("ValueBase") and TEAM_KEYS[string.lower(child.Name)] then
+			local ok, v = pcall(function() return child.Value end)
+			local tag = ok and teamValue(v)
+			if tag then return tag end
+		end
+	end
+end
+
+-- Cached for a moment: these are read for every target every frame
+local tagCache = setmetatable({}, { __mode = "k" })
+local function tagOf(player)
+	local now = os.clock()
+	local c = tagCache[player]
+	if c and now - c.at < 1 then return c.tag end
+	local char = player.Character
+	local tag = readTag(player) or readTag(char) or readTag(char and char:FindFirstChildOfClass("Humanoid"))
+		or readTag(player:FindFirstChild("leaderstats")) or readTag(player:FindFirstChild("Data"))
+		or readTag(player:FindFirstChild("Stats"))
+	tagCache[player] = { at = now, tag = tag or false }
+	return tag or false
+end
+
+-- Roblox teams as one key: the Team, or the TeamColor when the game uses colours only
+local function robloxTeam(p)
+	if p.Team then return p.Team end
+	if not p.Neutral then return p.TeamColor end
+end
+
+-- Whether the players who are actually fighting are split over more than one team
+local teamCache = { at = -1, split = false, tagSplit = false }
+local function refreshSplit()
+	local now = os.clock()
+	if now - teamCache.at < 0.5 then return end
+	teamCache.at = now
+	teamCache.split, teamCache.tagSplit = false, false
+	local myTeam, myTag = robloxTeam(LocalPlayer), tagOf(LocalPlayer)
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= LocalPlayer and not idleTeam(teamName(other)) then
+			if robloxTeam(other) ~= myTeam then teamCache.split = true end
+			local tag = tagOf(other)
+			if tag and tag ~= myTag then teamCache.tagSplit = true end
+		end
+	end
+end
+
+local friends = setmetatable({}, { __mode = "k" })
+local function checkFriend(p)
+	if p == LocalPlayer then return end
+	task.spawn(function()
+		local ok, yes = pcall(function() return LocalPlayer:IsFriendsWith(p.UserId) end)
+		friends[p] = ok and yes or false
+	end)
+end
+for _, p in ipairs(Players:GetPlayers()) do checkFriend(p) end
+connect(Players.PlayerAdded, checkFriend)
+
+function isTeammate(player)
+	if player == LocalPlayer then return true end
+	local mark = allyMarks[player]
+	if mark ~= nil then return mark end
+	if Settings.friendsAsTeam and friends[player] then return true end
+
+	-- a team the game stores itself is the most reliable signal
+	local mine, theirs = tagOf(LocalPlayer), tagOf(player)
+	if mine and theirs then
+		if mine ~= theirs then return false end
+		refreshSplit()
+		-- everyone carrying the same tag means it is not really a team
+		return teamCache.tagSplit or teamCache.split
+	end
+
+	local myTeam, theirTeam = robloxTeam(LocalPlayer), robloxTeam(player)
+	if myTeam == nil or theirTeam ~= myTeam then return false end
+	if ffaTeam(teamName(player)) or idleTeam(teamName(player)) then return false end
+	refreshSplit()
 	return teamCache.split
 end
 
-local TEAM_ATTRIBUTES = { "Team", "TeamName", "TeamId", "TeamID", "Side", "Squad" }
-local function teamAttribute(player)
-	for _, key in ipairs(TEAM_ATTRIBUTES) do
-		local v = player:GetAttribute(key)
-		if v == nil and player.Character then v = player.Character:GetAttribute(key) end
-		if v ~= nil and v ~= "" then return v end
+-- NPCs ------------------------------------------------------------------------
+local OWNER_KEYS = {
+	owner = true, ownerid = true, ownername = true, creator = true, creatorid = true, summoner = true,
+	master = true, leader = true, player = true, playerid = true, userid = true, controller = true, spawner = true,
+}
+local FRIENDLY_WORDS = { "friendly", "friend", "ally", "allies", "allied", "pet", "follower", "companion", "minion", "summon" }
+local HOSTILE_WORDS = { "enem", "hostile", "mob", "monster", "zombie", "bandit", "boss" }
+
+local function playerFrom(v)
+	if typeof(v) == "Instance" then
+		if v:IsA("Player") then return v end
+		return Players:GetPlayerFromCharacter(v)
+	elseif type(v) == "number" then
+		return Players:GetPlayerByUserId(v)
+	elseif type(v) == "string" and v ~= "" then
+		local p = Players:FindFirstChild(v)
+		if p and p:IsA("Player") then return p end
+		local id = tonumber(v)
+		return id and Players:GetPlayerByUserId(id)
 	end
 end
 
--- Many games put everyone on one team; that must not count as "all teammates"
-local function isTeammate(player)
-	local mine, theirs = teamAttribute(LocalPlayer), teamAttribute(player)
-	if mine ~= nil and theirs ~= nil then return mine == theirs end
-	local myTeam = LocalPlayer.Team
-	if not myTeam or player.Team ~= myTeam or player.Neutral then return false end
-	if ffaTeam(teamName(player)) then return false end
-	return teamsSplit()
+local function ownerOf(model)
+	for key, v in pairs(model:GetAttributes()) do
+		if OWNER_KEYS[string.lower(key)] then
+			local p = playerFrom(v)
+			if p then return p end
+		end
+	end
+	for _, child in ipairs(model:GetChildren()) do
+		if child:IsA("ValueBase") and OWNER_KEYS[string.lower(child.Name)] then
+			local ok, v = pcall(function() return child.Value end)
+			local p = ok and playerFrom(v)
+			if p then return p end
+		end
+	end
+end
+
+local function hasWord(name, words)
+	for _, w in ipairs(words) do
+		if name:find(w, 1, true) then return true end
+	end
+	return false
+end
+
+local function npcAlly(model)
+	-- pets, summons and turrets belong to someone
+	local owner = ownerOf(model)
+	if owner then return isTeammate(owner) end
+
+	-- a team tag on the NPC, compared with every way our own team is written
+	local theirs = readTag(model) or readTag(model:FindFirstChildOfClass("Humanoid"))
+	if theirs then
+		local mine = tagOf(LocalPlayer)
+		if mine and theirs == mine then return true end
+		if LocalPlayer.Team then
+			return theirs == teamValue(LocalPlayer.Team) or theirs == "c:" .. LocalPlayer.TeamColor.Name
+				or theirs == "i:" .. LocalPlayer.Team:GetFullName()
+		end
+		return false
+	end
+
+	-- the name, or the folders it lives in: workspace.Red.NPCs, workspace.Allies, workspace.Enemies ...
+	local name = string.lower(model.Name)
+	if hasWord(name, HOSTILE_WORDS) then return false end
+	if hasWord(name, FRIENDLY_WORDS) then return true end
+	local myTeamName = LocalPlayer.Team and string.lower(LocalPlayer.Team.Name):gsub("%s+", "")
+	local node = model.Parent
+	while node and node ~= workspace and node ~= game do
+		local n = string.lower(node.Name):gsub("%s+", "")
+		if myTeamName and #myTeamName >= 3 and n:find(myTeamName, 1, true) then return true end
+		if hasWord(n, HOSTILE_WORDS) then return false end
+		if hasWord(n, FRIENDLY_WORDS) then return true end
+		node = node.Parent
+	end
+	return false
+end
+
+local npcCache = setmetatable({}, { __mode = "k" })
+function isAllyNpc(model)
+	local mark = allyMarks[model]
+	if mark ~= nil then return mark end
+	local now = os.clock()
+	local c = npcCache[model]
+	if c and now - c.at < 1 then return c.ally end
+	local ok, ally = pcall(npcAlly, model)
+	ally = ok and ally == true
+	npcCache[model] = { at = now, ally = ally }
+	return ally
+end
 end
 
 -- Players in a lobby or spectating while we fight, or still spawn-protected, can't be hit
@@ -2225,7 +2412,7 @@ function espStep()
 		local root = char and bodyRoot(char)
 		local alive = root ~= nil and (hum == nil or hum.Health > 0)
 
-		if not (Settings.enabled and alive) or (not isNpc and Settings.teamCheck and isTeammate(player)) then
+		if not (Settings.enabled and alive) or (Settings.teamCheck and (if isNpc then isAllyNpc(player) else isTeammate(player))) then
 			hideVisual(o)
 			continue
 		end
@@ -2375,6 +2562,7 @@ local function evaluate(target, camera, mouse, cfg)
 		if who == "Players" or not target:IsDescendantOf(workspace) then return end
 		char, hum = target, target:FindFirstChildOfClass("Humanoid")
 		if not hum or hum.Health <= 0 then return end
+		if cfg.team and isAllyNpc(target) then return end
 	end
 	local camPos = camera.CFrame.Position
 	local full = cfg.fov >= FOV_FULL
@@ -2454,6 +2642,46 @@ function findTarget(camera, mouse, cfg, current)
 	if current then hiddenSince[current] = nil end
 	return bestPlayer, bestPart
 end
+
+-- Mark teammate key: teammate -> enemy -> automatic, for whoever is nearest the cursor
+connect(UserInputService.InputBegan, function(input)
+	if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
+	if inputName(input) ~= Settings.allyKey then return end
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	local mouse = UserInputService:GetMouseLocation()
+	local best, bestDist, bestName = nil, 200, nil
+	local function try(target, model, label)
+		local root = model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head"))
+		if root and not root:IsA("BasePart") then return end
+		if not root then return end
+		local head = model:FindFirstChild("Head")
+		local pos = (head and head:IsA("BasePart")) and head.Position or root.Position
+		local screen, onScreen = camera:WorldToViewportPoint(pos)
+		if not onScreen then return end
+		local d = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
+		if d < bestDist then best, bestDist, bestName = target, d, label end
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then try(p, (bodyOf(p)), p.DisplayName) end
+	end
+	for _, model in ipairs(npcModels) do try(model, model, model.Name) end
+	if not best then
+		toast("Point at a player or NPC first")
+		return
+	end
+	local mark = allyMarks[best]
+	if mark == nil then
+		allyMarks[best] = true
+		toast(bestName .. " marked as teammate")
+	elseif mark == true then
+		allyMarks[best] = false
+		toast(bestName .. " marked as enemy")
+	else
+		allyMarks[best] = nil
+		toast(bestName .. " back to automatic")
+	end
+end)
 
 function circle(filled)
 	local frame = new("Frame", {
