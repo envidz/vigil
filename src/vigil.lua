@@ -115,6 +115,7 @@ local Settings = {
 	item = true,
 	arrows = true,
 	visCheck = false,
+	npcEsp = false,
 	bodySource = "Auto",
 	aimEnabled = false,
 	aimKey = "MouseButton2",
@@ -1112,6 +1113,7 @@ switch(espPage, "Glow through walls", "highlight")
 
 section(espPage, "Filter")
 switch(espPage, "Hide teammates", "teamCheck")
+switch(espPage, "Show NPCs", "npcEsp")
 switch(espPage, "Dim hidden players", "visCheck")
 segmented(espPage, "Follow", "bodySource", { "Auto", "Visible", "Character" })
 note(espPage, "Some games show a different model from a player's real character. Auto follows the visible one when the real one is hidden.")
@@ -1735,7 +1737,7 @@ end
 npcModels = {}
 local function refreshNpcs()
 	table.clear(npcModels)
-	if Settings.aimTargets == "Players" and Settings.silentTargets == "Players" then return end
+	if Settings.aimTargets == "Players" and Settings.silentTargets == "Players" and not Settings.npcEsp then return end
 	local owned = {}
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then owned[p.Character] = true end
@@ -2158,7 +2160,9 @@ end
 
 -- Live overlay ---------------------------------------------------------------
 
-Esp = {}
+Esp = {} -- Player or NPC model -> its visual
+local npcShown = {}
+local NPC_COLOUR = Color3.fromRGB(255, 170, 60) -- NPCs always read apart from players
 
 local function createEsp(player)
 	if player == LocalPlayer or Esp[player] then return end
@@ -2198,12 +2202,30 @@ function espStep()
 	local view = { size = size, tracerFrom = from }
 	local baseColour = EspColours[Settings.espColour][2]
 
+	-- NPC visuals follow the NPC list: added when one appears, dropped when it dies or leaves
+	table.clear(npcShown)
+	if Settings.enabled and Settings.npcEsp then
+		for _, model in ipairs(npcModels) do
+			npcShown[model] = true
+			createEsp(model)
+		end
+	end
+	for target in pairs(Esp) do
+		if not target:IsA("Player") and not npcShown[target] then removeEsp(target) end
+	end
+
 	for player, o in pairs(Esp) do
-		local char, hum = bodyOf(player)
+		local isNpc = not player:IsA("Player")
+		local char, hum
+		if isNpc then
+			char, hum = player, player:FindFirstChildOfClass("Humanoid")
+		else
+			char, hum = bodyOf(player)
+		end
 		local root = char and bodyRoot(char)
 		local alive = root ~= nil and (hum == nil or hum.Health > 0)
 
-		if not (Settings.enabled and alive) or (Settings.teamCheck and isTeammate(player)) then
+		if not (Settings.enabled and alive) or (not isNpc and Settings.teamCheck and isTeammate(player)) then
 			hideVisual(o)
 			continue
 		end
@@ -2213,9 +2235,16 @@ function espStep()
 			continue
 		end
 
-		local colour = (Settings.teamColour and player.Team) and player.TeamColor.Color or baseColour
-		local hidden = Settings.visCheck and not isVisible(camera, root, char, player.Character)
-		local tool = char:FindFirstChildOfClass("Tool") or (player.Character and player.Character:FindFirstChildOfClass("Tool"))
+		local colour, hidden, tool
+		if isNpc then
+			colour = NPC_COLOUR
+			hidden = Settings.visCheck and not isVisible(camera, root, char)
+			tool = char:FindFirstChildOfClass("Tool")
+		else
+			colour = (Settings.teamColour and player.Team) and player.TeamColor.Color or baseColour
+			hidden = Settings.visCheck and not isVisible(camera, root, char, player.Character)
+			tool = char:FindFirstChildOfClass("Tool") or (player.Character and player.Character:FindFirstChildOfClass("Tool"))
+		end
 
 		-- only touch the Highlight when something changed; rewriting it every frame is costly
 		local hl = o.highlight
@@ -2234,7 +2263,7 @@ function espStep()
 
 		renderVisual(o, {
 			char = char, root = root, colour = colour, hidden = hidden,
-			name = player.DisplayName, distance = distance, item = tool and tool.Name,
+			name = isNpc and player.Name or player.DisplayName, distance = distance, item = tool and tool.Name,
 			health = hum and math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1),
 			healthValue = hum and math.floor(hum.Health + 0.5),
 		}, project, view)
