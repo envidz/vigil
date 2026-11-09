@@ -167,6 +167,8 @@ local Settings = {
 	spyRecord = false,
 	spyOutgoing = true,
 	spyIncoming = true,
+	spyHideNoise = true,
+	spyUnique = false,
 	fullbright = false,
 	noFog = false,
 	lockTime = false,
@@ -1149,8 +1151,9 @@ onTheme(function() renderMaster(false) end)
 -- navigation: one highlight that slides between items
 local navScroll = new("ScrollingFrame", {
 	Position = UDim2.fromOffset(0, 100), Size = UDim2.new(1, -1, 1, -168), BackgroundTransparency = 1, BorderSizePixel = 0,
-	ScrollBarThickness = 0, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(), Parent = UI.side,
+	ScrollBarThickness = 3, ScrollBarImageTransparency = 0.55, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(), Parent = UI.side,
 })
+bind(navScroll, "ScrollBarImageColor3", "text")
 local navPill = new("Frame", {
 	Size = UDim2.new(1, -20, 0, 34), BackgroundTransparency = 0.88, BorderSizePixel = 0, Parent = navScroll,
 }, { round(10) })
@@ -3284,7 +3287,7 @@ hookState = { alive = true }
 
 -- Remote spy data
 do
-local spy = { on = false, listening = false, log = {}, muted = {}, conns = {}, total = 0, dirty = false }
+local spy = { on = false, listening = false, log = {}, muted = {}, conns = {}, noisy = {}, stats = {}, total = 0, hidden = 0, marks = 0, dirty = false, now = os.clock }
 UI.spy = spy
 local MAX_LOG = 400
 local COMMENT = string.rep("-", 2) .. " "
@@ -3302,10 +3305,111 @@ local function sameArgs(a, b)
 	return true
 end
 
+-- Background chatter: fps and ping reports, keep-alives, and anything firing constantly.
+-- It stays out of the log so the calls made by actual actions are easy to find.
+-- Nothing is blocked; this only decides what gets listed.
+local ShortNoise = { ping = true, pong = true, fps = true }
+local LongNoise = { "latency", "heartbeat", "keepalive", "telemetry", "analytics", "framerate", "metrics" }
+local RATE_LIMIT = 25 -- calls in one second; even fast guns stay under this
+local STEADY_CALLS = 5
+local noisyWords, noisyWordCount = {}, 0
+
+local function noisyWord(text)
+	local known = noisyWords[text]
+	if known ~= nil then return known end
+	local lower = string.lower(text)
+	local result = false
+	for _, word in ipairs(LongNoise) do
+		if string.find(lower, word, 1, true) then result = true; break end
+	end
+	if not result then
+		-- whole words only, so "Shipping" and "Typing" don't count as ping
+		local spaced = string.gsub(string.gsub(text, "(%l)(%u)", "%1 %2"), "(%u)(%u%l)", "%1 %2")
+		for word in string.gmatch(spaced, "%a+") do
+			if ShortNoise[string.lower(word)] then result = true; break end
+		end
+	end
+	if noisyWordCount > 2000 then table.clear(noisyWords); noisyWordCount = 0 end
+	noisyWords[text] = result
+	noisyWordCount += 1
+	return result
+end
+
+local function namedNoise(remote, args)
+	if noisyWord(remote.Name) then return true end
+	local first = args[1]
+	if type(first) == "string" then return #first <= 40 and noisyWord(first) end
+	if type(first) == "table" then
+		local looked = 0
+		for key in next, first do
+			looked += 1
+			if looked > 16 then return false end
+			if type(key) == "string" and #key <= 40 and noisyWord(key) then return true end
+		end
+	end
+	return false
+end
+
+local function flagNoisy(remote)
+	if spy.noisy[remote] then return end
+	spy.noisy[remote] = true
+	if not Settings.spyHideNoise then return end
+	local log = spy.log
+	for i = #log, 1, -1 do
+		if rawequal(log[i].remote, remote) then table.remove(log, i) end
+	end
+	spy.dirty = true
+end
+
+local function onlyNumbers(args)
+	if args.n == 0 then return false end
+	for i = 1, args.n do
+		if type(args[i]) ~= "number" then return false end
+	end
+	return true
+end
+
+-- spots remotes that fire constantly, or report bare numbers on a timer
+local function watchPattern(remote, args)
+	local now = spy.now()
+	local st = spy.stats[remote]
+	if not st then
+		st = { total = 0, last = now, windowAt = now, rate = 0, steady = 0 }
+		spy.stats[remote] = st
+	end
+	st.total += 1
+	if now - st.windowAt >= 1 then
+		st.windowAt = now
+		st.rate = 0
+	end
+	st.rate += 1
+	if st.rate >= RATE_LIMIT then flagNoisy(remote) end
+	local gap = now - st.last
+	st.last = now
+	if onlyNumbers(args) and gap >= 0.2 and gap <= 15 then
+		if st.gap and math.abs(gap - st.gap) <= st.gap * 0.2 then st.steady += 1 else st.steady = 0 end
+		st.gap = gap
+		if st.steady >= STEADY_CALLS then flagNoisy(remote) end
+	else
+		st.steady = 0
+		st.gap = nil
+	end
+end
+
+local function isNoise(remote, args)
+	return spy.noisy[remote] or namedNoise(remote, args)
+end
+
 -- add, record and finish run inside the game's own calls. They must never use a colon call:
 -- that would replace the method name the hook is about to forward.
 function spy.add(remote, kind, args)
 	if spy.muted[remote] then return end
+	watchPattern(remote, args)
+	if Settings.spyHideNoise and isNoise(remote, args) then
+		spy.hidden += 1
+		spy.dirty = true
+		return
+	end
 	local log = spy.log
 	local last = log[#log]
 	spy.total += 1
@@ -3321,10 +3425,22 @@ function spy.add(remote, kind, args)
 	return entry
 end
 
+local callingScript = typeof(getcallingscript) == "function" and getcallingscript or nil
+
 function spy.record(self, method, ...)
 	if method ~= "FireServer" and method ~= "InvokeServer" then return end
 	if not Settings.spyOutgoing or typeof(self) ~= "Instance" then return end
-	return spy.add(self, method == "FireServer" and "out" or "call", table.pack(...))
+	local entry = spy.add(self, method == "FireServer" and "out" or "call", table.pack(...))
+	if entry and callingScript then entry.from = callingScript() end
+	return entry
+end
+
+-- A divider in the log: press it right before doing the thing you want to capture
+function spy.mark()
+	spy.marks += 1
+	local stamp = os.date("%H:%M:%S")
+	spy.log[#spy.log + 1] = { kind = "mark", name = "Mark " .. spy.marks, args = table.pack(), count = 1, time = stamp, preview = stamp }
+	spy.dirty = true
 end
 
 function spy.finish(entry, ...)
@@ -3458,6 +3574,12 @@ function spy.script(entry)
 	return "local args = " .. spy.safeList(entry.args) .. "\n" .. path .. ":" .. method .. "(table.unpack(args, 1, " .. entry.args.n .. "))"
 end
 
+function spy.listener(entry)
+	local path = spy.path(entry.remote)
+	if not path then return COMMENT .. "This remote no longer exists: " .. entry.remote.Name end
+	return path .. ".OnClientEvent:Connect(function(...)\n    print(...)\nend)"
+end
+
 function spy.data(entry)
 	return "local data = " .. spy.safeList(entry.args)
 end
@@ -3472,13 +3594,17 @@ end
 
 function spy.describe(entry)
 	local lines = { spy.path(entry.remote) or ("Destroyed: " .. entry.remote.Name) }
-	lines[2] = entry.time .. (entry.count > 1 and ("   sent " .. entry.count .. " times") or "")
-	lines[3] = ""
-	lines[4] = (entry.kind == "in" and "Received " or "Sent ") .. spy.safeList(entry.args)
+	table.insert(lines, entry.time .. (entry.count > 1 and ("   sent " .. entry.count .. " times") or ""))
+	if entry.from then
+		local ok, path = pcall(spy.path, entry.from)
+		table.insert(lines, "From " .. (ok and path or entry.from.Name))
+	end
+	table.insert(lines, "")
+	table.insert(lines, (entry.kind == "in" and "Received " or "Sent ") .. spy.safeList(entry.args))
 	if entry.kind == "call" then
 		entry.replyShown = entry.reply ~= nil
-		lines[5] = ""
-		lines[6] = entry.reply and ("Reply " .. spy.safeList(entry.reply)) or "Waiting for the server to reply."
+		table.insert(lines, "")
+		table.insert(lines, entry.reply and ("Reply " .. spy.safeList(entry.reply)) or "Waiting for the server to reply.")
 	end
 	local out = table.concat(lines, "\n")
 	if #out > 6000 then out = string.sub(out, 1, 6000) .. "\n\nToo long to show. Copy it to get all of it." end
@@ -3488,6 +3614,10 @@ end
 function spy.copyAll(matches)
 	local parts = {}
 	for i, entry in ipairs(matches) do
+		if entry.kind == "mark" then
+			parts[i] = COMMENT .. entry.name .. " at " .. entry.time
+			continue
+		end
 		parts[i] = COMMENT .. entry.name .. " at " .. entry.time .. (entry.count > 1 and (", " .. entry.count .. " times") or "") .. "\n" .. spy.copyOne(entry)
 		local reply = spy.replyText(entry)
 		if reply then parts[i] ..= "\n" .. reply end
@@ -4149,8 +4279,8 @@ do
 local spy = UI.spy
 local MAX_ROWS = 100
 local MIN_W, MIN_H = 600, 340
-local HEADER, TOOLBAR = 46, 38
-local Tags = { out = "SEND", call = "CALL", ["in"] = "RECV" }
+local HEADER, TOOLBAR = 46, 72
+local Tags = { out = "SEND", call = "CALL", ["in"] = "RECV", mark = "MARK" }
 
 local function copy(text, message)
 	if not clipboard then return toast("This executor can't copy to the clipboard.") end
@@ -4210,6 +4340,13 @@ local toolbar = new("Frame", {
 	VerticalAlignment = Enum.VerticalAlignment.Center,
 }) })
 
+local toolbar2 = new("Frame", {
+	Position = UDim2.fromOffset(14, HEADER + 34), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1, Parent = root,
+}, { new("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+	VerticalAlignment = Enum.VerticalAlignment.Center,
+}) })
+
 local function pillButton(parent, order, text, onClick)
 	local btn = new("TextButton", {
 		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 0, 28), Text = text, FontFace = Tokens.font,
@@ -4240,6 +4377,7 @@ local function chip(order, text, key)
 		Settings[key] = not Settings[key]
 		save()
 		render()
+		spy.dirty = true
 	end)
 	table.insert(chipRenders, render)
 	onTheme(render)
@@ -4248,11 +4386,13 @@ end
 
 if canHook then chip(1, "Sent", "spyOutgoing") end
 chip(2, "Received", "spyIncoming")
+chip(3, "Hide noise", "spyHideNoise")
+chip(4, "One per remote", "spyUnique")
 
 local filter = new("TextBox", {
-	Size = UDim2.fromOffset(150, 28), Text = "", PlaceholderText = "Filter by name", ClearTextOnFocus = false, FontFace = Tokens.fontRegular,
+	Size = UDim2.fromOffset(150, 28), Text = "", PlaceholderText = "Search names and values", ClearTextOnFocus = false, FontFace = Tokens.fontRegular,
 	TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
-	BorderSizePixel = 0, LayoutOrder = 3, Parent = toolbar,
+	BorderSizePixel = 0, LayoutOrder = 5, Parent = toolbar,
 }, { round(Tokens.radius.md), padding(0, 10) })
 bind(filter, "BackgroundColor3", "raised")
 bind(filter, "TextColor3", "text")
@@ -4318,6 +4458,7 @@ end)
 local copyReply = pillButton(actions, 2, "Copy reply", function()
 	local e = spy.open
 	if not e then return end
+	if e.kind == "in" then return copy(spy.listener(e), "Listener copied") end
 	local reply = spy.replyText(e)
 	if reply then copy(reply, "Reply copied") else toast("The server hasn't replied yet.") end
 end)
@@ -4342,7 +4483,8 @@ local function openEntry(entry)
 	detailText.Text = spy.describe(entry)
 	detailScroll.CanvasPosition = Vector2.zero
 	copyMain.Text = entry.kind == "in" and "Copy data" or "Copy call"
-	copyReply.Visible = entry.kind == "call"
+	copyReply.Text = entry.kind == "in" and "Copy listener" or "Copy reply"
+	copyReply.Visible = entry.kind ~= "out"
 	hint.Visible = false
 	detailScroll.Visible = true
 	actions.Visible = true
@@ -4387,7 +4529,7 @@ local function rowAt(i)
 	connect(r.MouseEnter, function() item.hovered = true; paintRow(item) end)
 	connect(r.MouseLeave, function() item.hovered = false; paintRow(item) end)
 	connect(r.Activated, function()
-		if not item.entry then return end
+		if not item.entry or item.entry.kind == "mark" then return end
 		if spy.open == item.entry then closeEntry() else openEntry(item.entry) end
 	end)
 	rows[i] = item
@@ -4397,11 +4539,20 @@ end
 -- newest first, filtered
 local function matches()
 	local q = string.lower(filter.Text)
-	local out = {}
+	local unique = Settings.spyUnique
+	local out, seen = {}, {}
 	for i = #spy.log, 1, -1 do
 		local e = spy.log[i]
-		e.name = e.name or e.remote.Name
-		if q == "" or string.find(string.lower(e.name), q, 1, true) then out[#out + 1] = e end
+		if e.kind == "mark" then
+			if q == "" and not unique then out[#out + 1] = e end
+		else
+			e.name = e.name or e.remote.Name
+			local hit = q == "" or string.find(string.lower(e.name), q, 1, true) or string.find(string.lower(spy.preview(e)), q, 1, true)
+			if hit and not (unique and seen[e.remote]) then
+				seen[e.remote] = true
+				out[#out + 1] = e
+			end
+		end
 	end
 	return out
 end
@@ -4416,7 +4567,9 @@ local function refresh()
 		item.tag.Text = Tags[e.kind]
 		item.name.Text = e.name
 		item.preview.Text = spy.preview(e)
-		item.count.Text = e.waiting and "wait" or (e.count > 1 and ("x" .. e.count) or "")
+		local stat = Settings.spyUnique and e.remote and spy.stats[e.remote]
+		local times = stat and stat.total or e.count
+		item.count.Text = e.waiting and "wait" or (times > 1 and ("x" .. times) or "")
 		item.frame.Visible = true
 		paintRow(item)
 	end
@@ -4426,22 +4579,30 @@ local function refresh()
 	end
 	empty.Visible = shown == 0
 	status.Text = (#found == #spy.log and #found or (#found .. " of " .. #spy.log)) .. " logged"
+		.. (spy.hidden > 0 and (", " .. spy.hidden .. " noise hidden") or "")
 end
 
 connect(filter:GetPropertyChangedSignal("Text"), function() spy.dirty = true end)
 
-pillButton(toolbar, 4, "Copy all", function()
+pillButton(toolbar2, 1, "Mark", function()
+	spy.mark()
+	toast("Mark " .. spy.marks .. " added. Do the action now.")
+end)
+pillButton(toolbar2, 2, "Copy all", function()
 	local found = matches()
 	if #found == 0 then return toast("Nothing to copy yet.") end
 	copy(spy.copyAll(found), #found .. " copied")
 end)
-pillButton(toolbar, 5, "Clear", function()
+pillButton(toolbar2, 3, "Clear", function()
 	table.clear(spy.log)
+	table.clear(spy.stats)
+	spy.hidden, spy.marks = 0, 0
 	closeEntry()
 	toast("Log cleared")
 end)
-pillButton(toolbar, 6, "Stop ignoring", function()
+pillButton(toolbar2, 4, "Stop ignoring", function()
 	table.clear(spy.muted)
+	table.clear(spy.noisy)
 	toast("Nothing is ignored now")
 end)
 
