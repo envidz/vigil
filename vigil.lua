@@ -4064,7 +4064,7 @@ end
 local nextLabel = readout("Next buy", "Nothing")
 local incomeLabel = readout("Income", "0 a second")
 local waitingLabel = readout("Uncollected", "0")
-note(p, "Hops to the cheapest button you can afford and buys everything in reach, then brings you back. Waits while you're in a vehicle or away from your base. Gamepass and optional buttons are left alone.")
+note(p, "Hops to the cheapest button you can afford and buys everything in reach, then brings you back. Works from anywhere on the map, but waits while you're in a vehicle. Gamepass and optional buttons are left alone.")
 switch(p, "Auto collect cash", "mtCollect")
 switch(p, "Auto rebirth", "mtRebirth")
 note(p, "Auto rebirth resets your base as soon as you can pay for the next rebirth.")
@@ -4158,7 +4158,7 @@ end
 table.sort(list, function(a, b) return a.price < b.price end)
 return list
 end
-local BUY_RANGE, MAX_HOP, HOP_DELAY, home = 15, 400, 0.12, nil
+local BUY_RANGE, LONG_HOP, HOP_DELAY, home = 15, 400, 0.12, nil
 local function canMove(root)
 local humanoid = root.Parent:FindFirstChildOfClass("Humanoid")
 return humanoid and humanoid.Health > 0 and not humanoid.SeatPart
@@ -4201,17 +4201,14 @@ local wallet = { Cash = Data:Get("Cash") or 0, Diamonds = Data:Get("Diamonds") o
 local root = character()
 if Settings.mtBuy and first and wallet[first.d.Currency] >= first.price and root and canMove(root) then
 local distance = (first.at - root.Position).Magnitude
-if distance > MAX_HOP then
-nextLabel.Text = "Go back to your base"
-else
 if distance > BUY_RANGE then
 home = home or root.CFrame
 root.CFrame = CFrame.new(first.at + Vector3.new(0, 3, 0))
 root.AssemblyLinearVelocity = Vector3.zero
-task.wait(HOP_DELAY) -- let the server see the new position
+task.wait(distance > LONG_HOP and 0.4 or HOP_DELAY) -- let the server see the new position
 end
 bought = buyAround(first.at, list, wallet)
-end
+if not bought and distance > LONG_HOP then task.wait(5) end -- don't keep retrying a long hop that failed
 elseif home then
 goHome()
 end
