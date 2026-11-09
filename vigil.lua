@@ -157,6 +157,19 @@ mtDiamonds = false,
 mtCollect = false,
 mtRebirth = false,
 mtRewards = false,
+pcRoll = false,
+pcBuy = false,
+pcUpgrade = false,
+pcRewards = false,
+pcEquip = false,
+pcHatch = false,
+pcCollect = false,
+pcBank = false,
+pcEggEsp = false,
+pcGuardEsp = false,
+pcBuyRarity = "Rare",
+pcEquipFor = "FPS",
+pcEggRarity = "Common",
 mtAirdropEsp = false,
 csKillerEsp = false,
 csNpcEsp = false,
@@ -3587,7 +3600,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4251,7 +4264,201 @@ end
 end)
 end)
 end
+local function buildBuildAPC(p)
+local Storage = game:GetService("ReplicatedStorage")
+local RARITIES = { "Common", "Rare", "Epic", "Legendary", "Mythic", "Secret" }
+local RANK, COLOURS = {}, {
+Common = Color3.fromRGB(205, 205, 205), Rare = Color3.fromRGB(90, 165, 255), Epic = Color3.fromRGB(185, 110, 255),
+Legendary = Color3.fromRGB(255, 195, 70), Mythic = Color3.fromRGB(255, 90, 130), Secret = Color3.fromRGB(90, 245, 215),
+}
+for index, name in ipairs(RARITIES) do RANK[name] = index end
+local function myPlot()
+local plots = workspace:FindFirstChild("Plots")
+return plots and plots:FindFirstChild(LocalPlayer:GetAttribute("PlotName") or "")
+end
+local function character()
+return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+local function every(key, seconds, job)
+task.spawn(function()
+while hookState.alive do
+if Settings[key] then pcall(job) end
+task.wait(seconds)
+end
+end)
+end
+section(p, "Treadmill")
+switch(p, "Auto roll parts", "pcRoll")
+switch(p, "Auto buy rolled parts", "pcBuy")
+segmented(p, "Buy from", "pcBuyRarity", RARITIES)
+switch(p, "Auto upgrade treadmill", "pcUpgrade")
+note(p, "Rolling and buying only run while you're training on your treadmill. Buying spends FPS on anything at or above the rarity you pick.")
+section(p, "Pets")
+switch(p, "Auto equip best", "pcEquip")
+segmented(p, "Equip for", "pcEquipFor", { "FPS", "Luck", "Speed" })
+switch(p, "Auto hatch ready eggs", "pcHatch")
+section(p, "Rewards")
+switch(p, "Auto claim rewards", "pcRewards")
+note(p, "Claims daily, playtime, offline earnings, the free shop reward, the pet index and the group gift when they're ready.")
+section(p, "Egg heist")
+switch(p, "Auto collect nearby eggs", "pcCollect")
+switch(p, "Auto bank carried eggs", "pcBank")
+switch(p, "Egg ESP", "pcEggEsp")
+segmented(p, "Show eggs from", "pcEggRarity", RARITIES)
+switch(p, "Guardian ESP", "pcGuardEsp")
+local carrying = bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = "Nothing", Parent = (row(p, "Best egg out")),
+}), "TextColor3", "muted")
+local remotes = Storage:WaitForChild("PCRemotes", 15)
+if not remotes then
+carrying.Text = "Unavailable"
+return
+end
+task.spawn(function()
+while hookState.alive do
+if (Settings.pcRoll or Settings.pcBuy) and LocalPlayer:GetAttribute("IsTrainingSpeed") == true then
+local plot = myPlot()
+if plot then
+local rarity = plot:GetAttribute("CurrentRolledRarity")
+if Settings.pcBuy and (RANK[rarity] or 0) >= (RANK[Settings.pcBuyRarity] or 1) then
+pcall(function() return remotes.TreadmillBuyPartRequest:InvokeServer(plot) end)
+end
+if Settings.pcRoll then
+pcall(function() return remotes.TreadmillRollPartRequest:InvokeServer(plot) end)
+end
+end
+end
+task.wait(0.35)
+end
+end)
+every("pcUpgrade", 2, function() remotes.TreadmillUpgradeRequest:InvokeServer() end)
+every("pcEquip", 8, function()
+Storage.PCPetPlacement.EquipBestPets:FireServer(Settings.pcEquipFor)
+end)
+every("pcHatch", 2, function()
+local plot = myPlot()
+local placed = plot and plot.Pen:FindFirstChild("PlacedEggs")
+if not placed then return end
+for _, egg in ipairs(placed:GetChildren()) do
+local hatchAt, uid = egg:GetAttribute("HatchAt"), egg:GetAttribute("EggUID")
+if uid and type(hatchAt) == "number" and workspace:GetServerTimeNow() >= hatchAt then
+Storage.PCEggHatching.HatchEggFromMenu:FireServer(uid)
+task.wait(0.2)
+end
+end
+end)
+local giftAskedAt = -math.huge
+every("pcRewards", 5, function()
+if os.time() >= (LocalPlayer:GetAttribute("PCDailyNextClaimAt") or math.huge) then
+pcall(function() return Storage.PCDailyRewardsRemotes.Claim:InvokeServer(LocalPlayer:GetAttribute("PCDailyNextDay")) end)
+end
+local got, state = pcall(function() return Storage.PlaytimeRewardsRemotes.GetState:InvokeServer() end)
+if got and type(state) == "table" and type(state.Rewards) == "table" then
+for _, reward in pairs(state.Rewards) do
+if not state.Claimed[reward.Id] and (state.PlayedSeconds or 0) >= reward.RequiredSeconds then
+pcall(function() return Storage.PlaytimeRewardsRemotes.ClaimReward:InvokeServer(reward.Id) end)
+end
+end
+end
+if LocalPlayer:GetAttribute("RobuxShopFreeRewardReady") == true then
+pcall(function() return Storage.PCRobuxShopFreeReward:InvokeServer("Claim") end)
+end
+if LocalPlayer:GetAttribute("OfflineEarningsReady") == true and (LocalPlayer:GetAttribute("OfflineEarningsAmount") or 0) > 0 then
+pcall(function() return remotes.ClaimOfflineEarnings:InvokeServer() end)
+end
+if (LocalPlayer:GetAttribute("PetIndexClaimable") or 0) > 0 then
+pcall(function() return Storage.PCPetIndex.Claim:InvokeServer("__ALL__") end)
+end
+if LocalPlayer:GetAttribute("FreeGroupGiftClaimed") == false and os.clock() - giftAskedAt > 300 then
+giftAskedAt = os.clock()
+pcall(function() return Storage.PCFreeGroupGiftRemotes.ClaimGift:InvokeServer() end)
+end
+end)
+local function heist(name)
+local runtime = workspace:FindFirstChild("PCEggHeistRuntime")
+return runtime and runtime:FindFirstChild(name)
+end
+every("pcCollect", 0.4, function()
+local eggs, root = heist("ActiveEggs"), character()
+if not eggs or not root or LocalPlayer:GetAttribute("PCEggCarrying") == true then return end
+for _, egg in ipairs(eggs:GetChildren()) do
+local base = egg:FindFirstChild("EggRoot")
+local prompt = base and base:FindFirstChildWhichIsA("ProximityPrompt")
+if prompt and (base.Position - root.Position).Magnitude <= prompt.MaxActivationDistance then
+fireproximityprompt(prompt)
+return
+end
+end
+end)
+every("pcBank", 1, function()
+local zone, root = workspace:FindFirstChild("EggCollectZone"), character()
+if not zone or not root or LocalPlayer:GetAttribute("PCEggCarrying") ~= true then return end
+firetouchinterest(root, zone, 0)
+task.wait()
+firetouchinterest(root, zone, 1)
+end)
+local visuals = new("Folder", { Name = "VigilBuildAPC", Parent = ROOT })
+local shown = {}
+local function label(target, adornee, text, colour)
+local e = shown[target]
+if not e then
+local gui = new("BillboardGui", {
+Size = UDim2.fromOffset(220, 22), StudsOffset = Vector3.new(0, 3.5, 0), AlwaysOnTop = true,
+LightInfluence = 0, ResetOnSpawn = false, Adornee = adornee, Parent = visuals,
+})
+e = { gui = gui, text = new("TextLabel", {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, FontFace = Tokens.font,
+TextSize = 14, TextStrokeTransparency = 0.35, Parent = gui,
+}) }
+shown[target] = e
+end
+e.seen = true
+e.text.Text = text
+e.text.TextColor3 = colour
+end
+task.spawn(function()
+local GUARD = Color3.fromRGB(255, 70, 70)
+while hookState.alive do
+local root = character()
+local origin = root and root.Position
+for _, e in pairs(shown) do e.seen = false end
+local bestName, bestRank = nil, 0
+local eggs, guards = heist("ActiveEggs"), heist("Guardians")
+if eggs and origin then
+for _, egg in ipairs(eggs:GetChildren()) do
+local rarity = egg:GetAttribute("Rarity")
+local rank = RANK[rarity] or 0
+local base = egg:FindFirstChild("EggRoot")
+if base then
+local name = egg:GetAttribute("EggPetDisplayName") or egg.Name
+if rank > bestRank then bestName, bestRank = string.format("%s %s", rarity, name), rank end
+if Settings.pcEggEsp and rank >= (RANK[Settings.pcEggRarity] or 1) then
+label(egg, base, string.format("%s %s  %d", rarity or "", name, (base.Position - origin).Magnitude), COLOURS[rarity] or COLOURS.Common)
+end
+end
+end
+end
+if guards and origin and Settings.pcGuardEsp then
+for _, guard in ipairs(guards:GetChildren()) do
+local part = guard:IsA("Model") and (guard.PrimaryPart or guard:FindFirstChild("HumanoidRootPart") or guard:FindFirstChildWhichIsA("BasePart", true))
+if part then label(guard, part, string.format("%s  %d", guard.Name, (part.Position - origin).Magnitude), GUARD) end
+end
+end
+for target, e in pairs(shown) do
+if not e.seen then
+e.gui:Destroy()
+shown[target] = nil
+end
+end
+carrying.Text = bestName or "Nothing"
+task.wait(0.2)
+end
+end)
+end
 local Games = {
+{ name = "Build a PC", gameId = 10592694097, placeId = 133040801603256, build = buildBuildAPC },
 { name = "Military Tycoon", gameId = 2788648141, placeId = 7180042682, build = buildMilitaryTycoon },
 { name = "Closing Shift", gameId = 10767355485, placeId = 118297934142609, build = buildClosingShift },
 { name = "+1 Sword Forge", gameId = 10758912149, placeId = 93239606899307, build = buildSwordForge },
