@@ -179,6 +179,9 @@ local Settings = {
 	silentCameraRays = false,
 	silentRemotes = true,
 	silentWalls = false,
+	spyRecord = false,
+	spyOutgoing = true,
+	spyIncoming = true,
 	fullbright = false,
 	noFog = false,
 	lockTime = false,
@@ -426,6 +429,7 @@ local ICONS = {
 	close = "rbxassetid://10747384394",
 	eye = "rbxassetid://10723346959",
 	games = "rbxassetid://10723395215",
+	spy = "rbxassetid://10723346959",
 	discord = "rbxthumb://type=Asset&id=132364423955781&w=150&h=150",
 }
 
@@ -1056,6 +1060,7 @@ end
 
 local canMoveMouse = typeof(mousemoverel) == "function"
 local canHook = typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function"
+Settings.spyRecord = false -- recording only ever starts when asked for
 	and typeof(checkcaller) == "function"
 
 local pages, page, selectTab = {}
@@ -1102,6 +1107,7 @@ local tabs = {
 	{ id = "movement", title = "Movement", sub = "Changes how your character gets around." },
 	{ id = "players", title = "Players", sub = "Everyone in this server." },
 	{ id = "games", title = "Games", sub = "Scripts made for specific games." },
+	{ id = "spy", title = "Remote spy", sub = "What this game sends to the server, and what comes back.", master = "spyRecord" },
 	{ id = "settings", title = "Settings", sub = "Presets, appearance, keys and configs." },
 }
 local tabById = {}
@@ -1110,6 +1116,7 @@ local GROUPS = {
 	{ "Combat", { "aim", "silent", "trigger" } },
 	{ "Sight", { "esp", "visuals" } },
 	{ "World", { "movement", "players", "games" } },
+	{ "Tools", { "spy" } },
 }
 
 -- the big switch beside the page title, shared by every page that has one
@@ -3489,11 +3496,267 @@ local Redirected = {
 	ViewportPointToRay = true, ScreenPointToRay = true, Spherecast = true, Blockcast = true, FireServer = true, InvokeServer = true,
 }
 
+-- Remote spy data
+do
+local spy = { on = false, listening = false, log = {}, muted = {}, conns = {}, total = 0, dirty = false }
+UI.spy = spy
+local MAX_LOG = 400
+local COMMENT = string.rep("-", 2) .. " "
+
+local function sameArgs(a, b)
+	if a.n ~= b.n then return false end
+	for i = 1, a.n do
+		local x, y = a[i], b[i]
+		if type(x) == "table" or type(y) == "table" then
+			if not rawequal(x, y) then return false end
+		elseif x ~= y then
+			return false
+		end
+	end
+	return true
+end
+
+-- add, record and finish run inside the game's own calls. They must never use a colon call:
+-- that would replace the method name the hook is about to forward.
+function spy.add(remote, kind, args)
+	if spy.muted[remote] then return end
+	local log = spy.log
+	local last = log[#log]
+	spy.total += 1
+	spy.dirty = true
+	-- a remote firing the same thing over and over stays one line
+	if last and kind ~= "call" and last.kind == kind and rawequal(last.remote, remote) and sameArgs(last.args, args) then
+		last.count += 1
+		return last
+	end
+	local entry = { remote = remote, kind = kind, args = args, count = 1, time = os.date("%H:%M:%S"), waiting = kind == "call" }
+	log[#log + 1] = entry
+	if #log > MAX_LOG then table.remove(log, 1) end
+	return entry
+end
+
+function spy.record(self, method, ...)
+	if method ~= "FireServer" and method ~= "InvokeServer" then return end
+	if not Settings.spyOutgoing or typeof(self) ~= "Instance" then return end
+	return spy.add(self, method == "FireServer" and "out" or "call", table.pack(...))
+end
+
+function spy.finish(entry, ...)
+	entry.reply = table.pack(...)
+	entry.waiting = false
+	spy.dirty = true
+	return ...
+end
+
+local function quote(text)
+	return string.format("%q", text)
+end
+
+local Reserved = {}
+for _, word in ipairs({ "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while" }) do
+	Reserved[word] = true
+end
+
+local function isName(text)
+	return type(text) == "string" and string.match(text, "^[%a_][%w_]*$") ~= nil and not Reserved[text]
+end
+
+local function num(n)
+	if n ~= n then return "0/0" end
+	if n == math.huge then return "math.huge" end
+	if n == -math.huge then return "-math.huge" end
+	return tostring(n)
+end
+
+local function nums(...)
+	local out = table.pack(...)
+	for i = 1, out.n do out[i] = num(out[i]) end
+	return table.concat(out, ", ")
+end
+
+-- A script path to an instance, or nil once it has left the game
+function spy.path(inst)
+	local tail = ""
+	local node = inst
+	while node do
+		if node == game then return "game" .. tail end
+		if node == workspace then return "workspace" .. tail end
+		if node == LocalPlayer then return 'game:GetService("Players").LocalPlayer' .. tail end
+		if node == LocalPlayer.Character then return 'game:GetService("Players").LocalPlayer.Character' .. tail end
+		local parent = node.Parent
+		if parent == game then
+			local ok, service = pcall(game.FindService, game, node.ClassName)
+			if ok and service == node then return 'game:GetService("' .. node.ClassName .. '")' .. tail end
+		end
+		local name = node.Name
+		tail = (isName(name) and ("." .. name) or ("[" .. quote(name) .. "]")) .. tail
+		node = parent
+	end
+	return nil
+end
+
+local function text(v, indent, seen)
+	local kind = typeof(v)
+	if kind == "nil" then return "nil" end
+	if kind == "boolean" then return tostring(v) end
+	if kind == "number" then return num(v) end
+	if kind == "string" then return quote(v) end
+	if kind == "Vector3" then return "Vector3.new(" .. nums(v.X, v.Y, v.Z) .. ")" end
+	if kind == "Vector2" then return "Vector2.new(" .. nums(v.X, v.Y) .. ")" end
+	if kind == "CFrame" then return "CFrame.new(" .. nums(v:GetComponents()) .. ")" end
+	if kind == "Color3" then return "Color3.new(" .. nums(v.R, v.G, v.B) .. ")" end
+	if kind == "UDim" then return "UDim.new(" .. nums(v.Scale, v.Offset) .. ")" end
+	if kind == "UDim2" then return "UDim2.new(" .. nums(v.X.Scale, v.X.Offset, v.Y.Scale, v.Y.Offset) .. ")" end
+	if kind == "NumberRange" then return "NumberRange.new(" .. nums(v.Min, v.Max) .. ")" end
+	if kind == "BrickColor" then return "BrickColor.new(" .. quote(v.Name) .. ")" end
+	if kind == "Ray" then return "Ray.new(" .. text(v.Origin) .. ", " .. text(v.Direction) .. ")" end
+	if kind == "EnumItem" then return tostring(v) end
+	if kind == "buffer" then return "buffer.fromstring(" .. quote(buffer.tostring(v)) .. ")" end
+	if kind == "Instance" then return spy.path(v) or quote("destroyed: " .. v.Name) end
+	if kind ~= "table" then return quote("<" .. kind .. ">") end
+
+	indent = indent or ""
+	seen = seen or { count = 0 }
+	if seen[v] then return quote("<cycle>") end
+	seen.count += 1
+	if seen.count > 3000 or #indent > 40 then return quote("<cut off>") end
+	seen[v] = true
+	local inner = indent .. "    "
+	local lines = {}
+	local length = rawlen(v)
+	for i = 1, length do
+		lines[#lines + 1] = inner .. text(rawget(v, i), inner, seen)
+	end
+	for key, value in next, v do
+		if not (type(key) == "number" and key >= 1 and key <= length and key % 1 == 0) then
+			local label = isName(key) and key or ("[" .. text(key, inner, seen) .. "]")
+			lines[#lines + 1] = inner .. label .. " = " .. text(value, inner, seen)
+		end
+	end
+	seen[v] = nil
+	if #lines == 0 then return "{}" end
+	return "{\n" .. table.concat(lines, ",\n") .. "\n" .. indent .. "}"
+end
+spy.text = text
+
+-- A packed argument list as a table literal; holes stay in place
+function spy.list(args)
+	if args.n == 0 then return "{}" end
+	local lines = {}
+	for i = 1, args.n do
+		lines[i] = "    " .. text(args[i], "    ")
+	end
+	return "{\n" .. table.concat(lines, ",\n") .. "\n}"
+end
+
+function spy.safeList(args)
+	local ok, result = pcall(spy.list, args)
+	return ok and result or quote("<could not read this value>")
+end
+
+function spy.preview(entry)
+	if entry.preview then return entry.preview end
+	local ok, result = pcall(spy.list, entry.args)
+	local flat = ok and string.gsub(string.gsub(result, "^{%s*", ""), "%s*}$", "") or ""
+	flat = string.sub(string.gsub(flat, "%s+", " "), 1, 90)
+	entry.preview = flat
+	return flat
+end
+
+-- A runnable copy of a sent call
+function spy.script(entry)
+	local path = spy.path(entry.remote)
+	if not path then return COMMENT .. "This remote no longer exists: " .. entry.remote.Name end
+	local method = entry.kind == "call" and "InvokeServer" or "FireServer"
+	if entry.args.n == 0 then return path .. ":" .. method .. "()" end
+	return "local args = " .. spy.safeList(entry.args) .. "\n" .. path .. ":" .. method .. "(table.unpack(args, 1, " .. entry.args.n .. "))"
+end
+
+function spy.data(entry)
+	return "local data = " .. spy.safeList(entry.args)
+end
+
+function spy.replyText(entry)
+	return entry.reply and ("local reply = " .. spy.safeList(entry.reply)) or nil
+end
+
+function spy.copyOne(entry)
+	return entry.kind == "in" and spy.data(entry) or spy.script(entry)
+end
+
+function spy.describe(entry)
+	local lines = { spy.path(entry.remote) or ("Destroyed: " .. entry.remote.Name) }
+	lines[2] = entry.time .. (entry.count > 1 and ("   sent " .. entry.count .. " times") or "")
+	lines[3] = ""
+	lines[4] = (entry.kind == "in" and "Received " or "Sent ") .. spy.safeList(entry.args)
+	if entry.kind == "call" then
+		entry.replyShown = entry.reply ~= nil
+		lines[5] = ""
+		lines[6] = entry.reply and ("Reply " .. spy.safeList(entry.reply)) or "Waiting for the server to reply."
+	end
+	local out = table.concat(lines, "\n")
+	if #out > 6000 then out = string.sub(out, 1, 6000) .. "\n\nToo long to show. Copy it to get all of it." end
+	return out
+end
+
+function spy.copyAll(matches)
+	local parts = {}
+	for i, entry in ipairs(matches) do
+		parts[i] = COMMENT .. entry.name .. " at " .. entry.time .. (entry.count > 1 and (", " .. entry.count .. " times") or "") .. "\n" .. spy.copyOne(entry)
+		local reply = spy.replyText(entry)
+		if reply then parts[i] ..= "\n" .. reply end
+	end
+	return table.concat(parts, "\n\n")
+end
+
+local function watch(remote)
+	if spy.conns[remote] then return end
+	spy.conns[remote] = remote.OnClientEvent:Connect(function(...)
+		if spy.on and Settings.spyIncoming then spy.add(remote, "in", table.pack(...)) end
+	end)
+end
+
+local function isEvent(inst)
+	return inst:IsA("RemoteEvent") or inst:IsA("UnreliableRemoteEvent")
+end
+
+local function stopListening()
+	spy.listening = false
+	if spy.added then spy.added:Disconnect(); spy.added = nil end
+	for _, c in pairs(spy.conns) do c:Disconnect() end
+	table.clear(spy.conns)
+end
+
+function spy.stop()
+	spy.on = false
+	stopListening()
+end
+
+-- Follows the settings, so the switches, the panic key and unload all just work
+function spy.sync()
+	spy.on = hookState.alive and Settings.spyRecord
+	local want = spy.on and Settings.spyIncoming
+	if want == spy.listening then return end
+	if not want then return stopListening() end
+	spy.listening = true
+	spy.added = game.DescendantAdded:Connect(function(inst)
+		if isEvent(inst) then pcall(watch, inst) end
+	end)
+	task.spawn(function()
+		for i, inst in ipairs(game:GetDescendants()) do
+			if not spy.listening then return end
+			if isEvent(inst) then pcall(watch, inst) end
+			if i % 4000 == 0 then task.wait() end
+		end
+	end)
+end
+end
+
 if canHook then
 	local wrap = typeof(newcclosure) == "function" and newcclosure or function(f) return f end
 
 	local oldNamecall
-	oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+	local function route(self, ...)
 		if hookState.alive and silent.active and not checkcaller() then
 			local method = getnamecallmethod()
 			if not Redirected[method] or not shooting() then
@@ -3553,6 +3816,15 @@ if canHook then
 			end
 		end
 		return oldNamecall(self, ...)
+	end
+
+	oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+		local spy = UI.spy
+		if hookState.alive and spy.on and not checkcaller() then
+			local entry = spy.record(self, getnamecallmethod(), ...)
+			if entry and entry.waiting then return spy.finish(entry, route(self, ...)) end
+		end
+		return route(self, ...)
 	end))
 
 	local mouseObject = LocalPlayer:GetMouse()
@@ -4009,7 +4281,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"enabled", "aimEnabled", "silentEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "enabled", "aimEnabled", "silentEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4161,6 +4433,219 @@ local function listRow(box, order, titleText, detailText, buttons, userId)
 		connect(btn.Activated, b[2])
 	end
 	return detail
+end
+
+-- Remote spy page --------------------------------------------------------------
+do
+local spy = UI.spy
+local spyPage = page("spy")
+local MAX_ROWS = 60
+local Tags = { out = "SEND", call = "CALL", ["in"] = "RECV" }
+
+local function copy(text, message)
+	if not clipboard then return toast("This executor can't copy to the clipboard.") end
+	clipboard(text)
+	toast(message)
+end
+
+section(spyPage, "Capture")
+if canHook then
+	switch(spyPage, "Calls sent to the server", "spyOutgoing")
+else
+	note(spyPage, "Calls sent to the server can't be logged because this executor can't hook game functions.")
+end
+switch(spyPage, "Events from the server", "spyIncoming")
+local filter = inputRow(spyPage, "Filter by name", "Remote name")
+local statusRow = row(spyPage, "Logged")
+local status = bind(new("TextLabel", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.5, -16, 0, 18),
+	BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+	TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = statusRow,
+}), "TextColor3", "muted")
+
+section(spyPage, "Log")
+local box = listBox(spyPage)
+
+local empty = new("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, LayoutOrder = 0, Parent = box })
+bind(new("TextLabel", {
+	Size = UDim2.new(1, -32, 1, 0), Position = UDim2.fromOffset(16, 0), BackgroundTransparency = 1,
+	FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "Nothing logged. Turn on the switch at the top, then play.", Parent = empty,
+}), "TextColor3", "muted")
+
+-- the open row's details sit right under it
+local detail = new("Frame", {
+	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false, Parent = box,
+}, { padding(2, 16, 14, 16), new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 10) }) })
+local detailText = new("TextBox", {
+	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextEditable = false, ClearTextOnFocus = false, MultiLine = true,
+	TextWrapped = true, FontFace = Tokens.mono, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top, BorderSizePixel = 0, Text = "", LayoutOrder = 1, Parent = detail,
+}, { round(Tokens.radius.md), padding(10, 12) })
+bind(detailText, "BackgroundColor3", "raised")
+bind(detailText, "TextColor3", "text")
+local detailButtons = new("Frame", {
+	Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = 2, Parent = detail,
+}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+
+local function detailButton(order, text, onClick)
+	local btn = new("TextButton", {
+		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = text, FontFace = Tokens.font,
+		TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order, Parent = detailButtons,
+	}, { round("full"), padding(0, 11) })
+	bind(btn, "BackgroundColor3", "raised")
+	bind(btn, "TextColor3", "text")
+	pressable(btn)
+	connect(btn.MouseEnter, function() tween(btn, { BackgroundColor3 = P.hover }, 0.12) end)
+	connect(btn.MouseLeave, function() tween(btn, { BackgroundColor3 = P.raised }, 0.12) end)
+	connect(btn.Activated, onClick)
+	return btn
+end
+
+local function closeEntry()
+	spy.open = nil
+	detail.Visible = false
+	spy.dirty = true
+end
+
+local copyMain = detailButton(1, "Copy call", function()
+	local e = spy.open
+	if e then copy(spy.copyOne(e), e.kind == "in" and "Data copied" or "Call copied") end
+end)
+local copyReply = detailButton(2, "Copy reply", function()
+	local e = spy.open
+	if not e then return end
+	local reply = spy.replyText(e)
+	if reply then copy(reply, "Reply copied") else toast("The server hasn't replied yet.") end
+end)
+detailButton(3, "Copy path", function()
+	local e = spy.open
+	if e then copy(spy.path(e.remote) or e.remote.Name, "Path copied") end
+end)
+detailButton(4, "Ignore", function()
+	local e = spy.open
+	if not e then return end
+	local remote = e.remote
+	spy.muted[remote] = true
+	for i = #spy.log, 1, -1 do
+		if rawequal(spy.log[i].remote, remote) then table.remove(spy.log, i) end
+	end
+	closeEntry()
+	toast("Ignoring " .. remote.Name, "Undo", function() spy.muted[remote] = nil end)
+end)
+
+local function openEntry(entry, r)
+	spy.open = entry
+	detail.LayoutOrder = r.LayoutOrder + 1
+	detailText.Text = spy.describe(entry)
+	copyMain.Text = entry.kind == "in" and "Copy data" or "Copy call"
+	copyReply.Visible = entry.kind == "call"
+	detail.Visible = true
+end
+
+local rows = {}
+local function rowAt(i)
+	if rows[i] then return rows[i] end
+	local r = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+		LayoutOrder = i * 2, Parent = box,
+	})
+	bind(r, "BackgroundColor3", "raised")
+	if i > 1 then hairline(r) end
+	local item = { frame = r }
+	item.tag = bind(new("TextLabel", {
+		Size = UDim2.fromOffset(40, 36), Position = UDim2.fromOffset(16, 0), BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = r,
+	}), "TextColor3", "muted")
+	item.name = bind(new("TextLabel", {
+		Size = UDim2.new(0.42, -60, 0, 36), Position = UDim2.fromOffset(60, 0), BackgroundTransparency = 1, FontFace = Tokens.font,
+		TextSize = Tokens.text.body, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
+	}), "TextColor3", "text")
+	item.preview = bind(new("TextLabel", {
+		Size = UDim2.new(0.58, -64, 0, 36), Position = UDim2.new(0.42, 8, 0, 0), BackgroundTransparency = 1, FontFace = Tokens.mono,
+		TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
+	}), "TextColor3", "muted")
+	item.count = bind(new("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0), Size = UDim2.fromOffset(46, 36), Position = UDim2.new(1, -14, 0, 0), BackgroundTransparency = 1,
+		FontFace = Tokens.mono, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, Parent = r,
+	}), "TextColor3", "muted")
+	connect(r.MouseEnter, function() tween(r, { BackgroundTransparency = 0.5 }, 0.1) end)
+	connect(r.MouseLeave, function() tween(r, { BackgroundTransparency = 1 }, 0.1) end)
+	connect(r.Activated, function()
+		if not item.entry then return end
+		if spy.open == item.entry then closeEntry() else openEntry(item.entry, r) end
+	end)
+	rows[i] = item
+	return item
+end
+
+-- newest first, filtered
+local function matches()
+	local q = string.lower(filter.Text)
+	local out = {}
+	for i = #spy.log, 1, -1 do
+		local e = spy.log[i]
+		e.name = e.name or e.remote.Name
+		if q == "" or string.find(string.lower(e.name), q, 1, true) then out[#out + 1] = e end
+	end
+	return out
+end
+
+local function refresh()
+	spy.dirty = false
+	local list = matches()
+	local shown = math.min(#list, MAX_ROWS)
+	for i = 1, shown do
+		local item, e = rowAt(i), list[i]
+		item.entry = e
+		item.tag.Text = Tags[e.kind]
+		item.name.Text = e.name
+		item.preview.Text = spy.preview(e)
+		item.count.Text = e.waiting and "wait" or (e.count > 1 and ("x" .. e.count) or "")
+		item.frame.Visible = true
+	end
+	for i = shown + 1, #rows do
+		rows[i].entry = nil
+		rows[i].frame.Visible = false
+	end
+	empty.Visible = shown == 0
+	status.Text = #list == #spy.log and tostring(#list) or (#list .. " of " .. #spy.log)
+end
+
+connect(filter:GetPropertyChangedSignal("Text"), function() spy.dirty = true end)
+
+section(spyPage, "Manage")
+buttonRow(spyPage, "Log", {
+	{ "Copy all", function()
+		local list = matches()
+		if #list == 0 then return toast("Nothing to copy yet.") end
+		copy(spy.copyAll(list), #list .. " copied")
+	end },
+	{ "Clear", function()
+		table.clear(spy.log)
+		closeEntry()
+		toast("Log cleared")
+	end },
+	{ "Stop ignoring", function()
+		table.clear(spy.muted)
+		toast("Nothing is ignored now")
+	end },
+})
+note(spyPage, "The list holds still while a row is open, so you can read it. Close the row to catch up.")
+
+task.spawn(function()
+	while hookState.alive do
+		spy.sync()
+		local open = spy.open
+		if open then
+			if open.kind == "call" and open.reply and not open.replyShown then detailText.Text = spy.describe(open) end
+			status.Text = "Paused while a row is open"
+		elseif spy.dirty and spyPage.Visible then
+			pcall(refresh)
+		end
+		task.wait(0.25)
+	end
+end)
 end
 
 -- Freecam and spectate ----------------------------------------------------------
@@ -4982,6 +5467,7 @@ unload = function()
 	pcall(function() RunService:UnbindFromRenderStep(RENDER_STEP) end)
 	hookState.alive = false
 	silent.active = false
+	UI.spy.stop()
 	pcall(releaseTrigger)
 	pcall(features.cleanup)
 	stopFly(select(2, localCharacter()))
