@@ -177,6 +177,8 @@ local Settings = {
 	silentRaycast = true,
 	silentMouse = true,
 	silentCameraRays = false,
+	silentRemotes = true,
+	silentWalls = false,
 	fullbright = false,
 	noFog = false,
 	lockTime = false,
@@ -1006,14 +1008,14 @@ Presets = {
 	{ "Silent", {
 		aimEnabled = false, silentEnabled = true, silentPart = "Closest", hitChance = 75,
 		silentFov = 100, showSilentFov = false, showSilentTarget = false, silentVisibleOnly = true,
-		silentTeamCheck = true, silentMaxDistance = 1000, silentTargets = "Players",
+		silentTeamCheck = true, silentMaxDistance = 1000, silentTargets = "Players", silentWalls = false,
 	} },
 	{ "Rage", {
 		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Crosshair", aimMethod = "Auto",
 		fov = 500, showFov = true, smoothing = 1, visibleOnly = false, stickyTarget = false,
 		aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head", hitChance = 100,
 		silentFov = 600, silentVisibleOnly = false, showSilentTarget = true, silentMaxDistance = 3000,
-		aimTargets = "Players", silentTargets = "Players",
+		aimTargets = "Players", silentTargets = "Players", silentWalls = false,
 	} },
 	{ "Ultra rage", { -- full screen, through walls, snaps and stays on the target
 		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance", aimMethod = "Auto",
@@ -1021,7 +1023,7 @@ Presets = {
 		stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
 		hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
 		showSilentTarget = true, silentMaxDistance = 3000, silentRaycast = true, silentMouse = true,
-		silentCameraRays = true, aimTargets = "Players", silentTargets = "Players",
+		silentCameraRays = true, silentWalls = true, aimTargets = "Players", silentTargets = "Players",
 	} },
 	{ "NPC ultra rage", { -- the same, but only on NPCs (bots, mobs, dummies)
 		aimEnabled = true, aimMode = "Always", aimPart = "Head", aimPriority = "Distance", aimMethod = "Auto",
@@ -1029,7 +1031,7 @@ Presets = {
 		stickyTarget = true, aimMaxDistance = 3000, silentEnabled = true, silentPart = "Head",
 		hitChance = 100, silentFov = FOV_FULL, showSilentFov = false, silentVisibleOnly = false,
 		showSilentTarget = true, silentMaxDistance = 3000, silentRaycast = true, silentMouse = true,
-		silentCameraRays = true, aimTargets = "NPCs", silentTargets = "NPCs",
+		silentCameraRays = true, silentWalls = true, aimTargets = "NPCs", silentTargets = "NPCs",
 	} },
 }
 
@@ -1663,10 +1665,12 @@ if canHook then
 	switch(silentPage, "Mark target", "showSilentTarget")
 
 	section(silentPage, "Redirect")
-	note(silentPage, "Games aim shots in different ways. Most use raycasts or the mouse position; try screen rays if neither works.")
+	note(silentPage, "Games aim shots in different ways, so leave these on unless one causes trouble. Only shots you are firing are changed.")
 	switch(silentPage, "Raycasts", "silentRaycast")
 	switch(silentPage, "Mouse position", "silentMouse")
 	switch(silentPage, "Screen rays", "silentCameraRays")
+	switch(silentPage, "Shots sent to the server", "silentRemotes")
+	switch(silentPage, "Shoot through walls", "silentWalls")
 else
 	note(silentPage, "Silent aim isn't available because this executor can't hook game functions.")
 end
@@ -3075,6 +3079,19 @@ local function evaluate(target, camera, mouse, cfg)
 			end
 		end
 	end
+	if cfg.anyPart and not bestSeen then
+		for _, part in pairs(candidateParts(char, "Closest")) do
+			if part ~= best and part.Parent then
+				local worldDist = (camPos - part.Position).Magnitude
+				local screen, onScreen = camera:WorldToViewportPoint(part.Position)
+				local screenDist = onScreen and (Vector2.new(screen.X, screen.Y) - mouse).Magnitude or 1e5 + worldDist
+				if worldDist <= cfg.maxDistance and (onScreen or full) and (full or screenDist <= cfg.fov)
+					and isVisible(camera, part, char, extra) then
+					return part, screenDist, worldDist, true
+				end
+			end
+		end
+	end
 	return best, bestScreen, bestWorld, bestSeen
 end
 
@@ -3360,13 +3377,15 @@ function silentStep(camera, mouse)
 
 	local enabled = canHook and Settings.silentEnabled
 	local part
-	if enabled and not Holder.Visible then
-		local _
-		_, part = findTarget(camera, mouse, {
+	if enabled then
+		-- passing the last target keeps a burst on one enemy instead of flipping between two
+		silent.target, part = findTarget(camera, mouse, {
 			part = Settings.silentPart, team = Settings.silentTeamCheck, visible = Settings.silentVisibleOnly,
 			maxDistance = Settings.silentMaxDistance, fov = Settings.silentFov, priority = "Crosshair",
-			targets = Settings.silentTargets,
-		})
+			targets = Settings.silentTargets, anyPart = true,
+		}, silent.target)
+	else
+		silent.target = nil
 	end
 
 	placeCircle(silentCircle, silentStroke, enabled and Settings.showSilentFov and Settings.silentFov < FOV_FULL, mouse, Settings.silentFov, part ~= nil)
@@ -3387,6 +3406,17 @@ function silentStep(camera, mouse)
 	silent.aimPoint = mouseRay.Origin + mouseRay.Direction * 1000
 	silent.hitCFrame = CFrame.lookAt(pos, pos + unit)
 	silent.unitRay = Ray.new(camPos, unit)
+	silent.camPos, silent.aimDir, silent.dirTo = camPos, mouseRay.Direction, unit
+	local mine = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	silent.myPos = mine and mine.Position or camPos
+	local target = silent.target
+	if Settings.silentVisibleOnly then
+		silent.seen = true
+	elseif target:IsA("Player") then
+		silent.seen = isVisible(camera, part, (bodyOf(target)), target.Character)
+	else
+		silent.seen = isVisible(camera, part, target)
+	end
 	-- the roll is held for a moment, so hit chance decides per shot and never flickers per frame
 	local now = os.clock()
 	if now - silent.rolledAt > 0.15 then
@@ -3400,19 +3430,62 @@ function silentStep(camera, mouse)
 	markerStroke.Color = P.accent
 end
 
--- Bends a shot toward the target, but only shots fired roughly where the player is aiming
+-- Bends a shot toward the target, but only shots fired roughly where the player is aiming.
+-- Returns the new direction and where the shot should start.
 local function redirect(origin, direction)
 	local length = direction.Magnitude
 	if length < 1e-3 then return end
 	local toAim = silent.aimPoint - origin
-	if toAim.Magnitude < 1e-3 or direction.Unit:Dot(toAim.Unit) < 0.85 then return end
-	local toTarget = silent.position - origin
-	return toTarget.Unit * math.max(length, toTarget.Magnitude * 1.05)
+	if toAim.Magnitude < 1e-3 or direction.Unit:Dot(toAim.Unit) < 0.6 then return end
+	local target = silent.position
+	if Settings.silentWalls and not silent.seen then
+		-- start right in front of the target, so nothing in between can stop the shot
+		origin = target - silent.dirTo * 3
+	end
+	local toTarget = target - origin
+	return toTarget.Unit * math.max(length, toTarget.Magnitude * 1.05), origin
+end
+
+-- Games that send the shot to the server pass the aim along as a direction, a point or a
+-- CFrame. Only values that clearly match where the player is aiming are replaced.
+local function bendArg(v, depth)
+	local kind = typeof(v)
+	if kind == "Vector3" then
+		local m = v.Magnitude
+		if m > 0.9 and m < 1.1 then
+			if v:Dot(silent.aimDir) > 0.97 then return silent.dirTo end
+		elseif m > 0 then
+			local fromCam = v - silent.camPos
+			if fromCam.Magnitude > 12 and (v - silent.myPos).Magnitude > 8 and fromCam.Unit:Dot(silent.aimDir) > 0.995 then
+				return silent.position
+			end
+		end
+	elseif kind == "CFrame" then
+		if (v.Position - silent.camPos).Magnitude < 40 and v.LookVector:Dot(silent.aimDir) > 0.97 then
+			return CFrame.lookAt(v.Position, silent.position)
+		end
+	elseif kind == "table" and depth < 2 and getmetatable(v) == nil then
+		local copy
+		for key, item in pairs(v) do
+			local bent = bendArg(item, depth + 1)
+			if not rawequal(bent, item) then
+				copy = copy or table.clone(v)
+				copy[key] = bent
+			end
+		end
+		return copy or v
+	end
+	return v
 end
 
 local RayMethods = { FindPartOnRay = true, FindPartOnRayWithIgnoreList = true, FindPartOnRayWithWhitelist = true }
+local Shapecasts = { Spherecast = true, Blockcast = true }
+local Remotes = { FireServer = true, InvokeServer = true }
 local MouseSpoof = { Hit = true, Target = true, UnitRay = true }
-local Redirected = { Raycast = true, FindPartOnRay = true, FindPartOnRayWithIgnoreList = true, FindPartOnRayWithWhitelist = true, ViewportPointToRay = true, ScreenPointToRay = true }
+local Redirected = {
+	Raycast = true, FindPartOnRay = true, FindPartOnRayWithIgnoreList = true, FindPartOnRayWithWhitelist = true,
+	ViewportPointToRay = true, ScreenPointToRay = true, Spherecast = true, Blockcast = true, FireServer = true, InvokeServer = true,
+}
 
 if canHook then
 	local wrap = typeof(newcclosure) == "function" and newcclosure or function(f) return f end
@@ -3427,23 +3500,47 @@ if canHook then
 			if method == "Raycast" and Settings.silentRaycast then
 				local origin, direction = ...
 				if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-					local bent = redirect(origin, direction)
+					local bent, start = redirect(origin, direction)
 					if bent then
 						local args = table.pack(...)
-						args[2] = bent
+						args[1], args[2] = start, bent
 						return oldNamecall(self, table.unpack(args, 1, args.n))
 					end
 				end
 			elseif RayMethods[method] and Settings.silentRaycast then
 				local ray = ...
 				if typeof(ray) == "Ray" then
-					local bent = redirect(ray.Origin, ray.Direction)
+					local bent, start = redirect(ray.Origin, ray.Direction)
 					if bent then
 						local args = table.pack(...)
-						args[1] = Ray.new(ray.Origin, bent)
+						args[1] = Ray.new(start, bent)
 						return oldNamecall(self, table.unpack(args, 1, args.n))
 					end
 				end
+			elseif Shapecasts[method] and Settings.silentRaycast then
+				local args = table.pack(...)
+				local from, direction = args[1], args[3]
+				local isCFrame = typeof(from) == "CFrame"
+				local pos = isCFrame and from.Position or from
+				if typeof(pos) == "Vector3" and typeof(direction) == "Vector3" then
+					local bent, start = redirect(pos, direction)
+					if bent then
+						args[1] = isCFrame and (from - pos + start) or start
+						args[3] = bent
+						return oldNamecall(self, table.unpack(args, 1, args.n))
+					end
+				end
+			elseif Remotes[method] and Settings.silentRemotes then
+				local args = table.pack(...)
+				local changed = false
+				for i = 1, args.n do
+					local bent = bendArg(args[i], 0)
+					if not rawequal(bent, args[i]) then
+						args[i] = bent
+						changed = true
+					end
+				end
+				if changed then return oldNamecall(self, table.unpack(args, 1, args.n)) end
 			elseif (method == "ViewportPointToRay" or method == "ScreenPointToRay") and Settings.silentCameraRays then
 				local x, y = ...
 				local ref = method == "ViewportPointToRay" and silent.mouse or (silent.mouse - silent.inset)
@@ -3457,11 +3554,12 @@ if canHook then
 	end))
 
 	local mouseObject = LocalPlayer:GetMouse()
+	local isA = game.IsA
 	local oldIndex
 	oldIndex = hookmetamethod(game, "__index", wrap(function(self, key)
 		-- X and Y stay real: games draw their cursors and menus from them
-		if hookState.alive and silent.active and MouseSpoof[key] and rawequal(self, mouseObject) and Settings.silentMouse
-			and not checkcaller() and shooting() then
+		if hookState.alive and silent.active and MouseSpoof[key] and Settings.silentMouse and not checkcaller()
+			and (rawequal(self, mouseObject) or (typeof(self) == "Instance" and isA(self, "Mouse"))) and shooting() then
 			if key == "Hit" then
 				return silent.hitCFrame
 			elseif key == "Target" then
