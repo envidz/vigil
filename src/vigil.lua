@@ -175,6 +175,15 @@ local Settings = {
 	swordForgeUpgrades = false,
 	swordForgeSell = false,
 	swordForgeRebirth = false,
+	csKillerEsp = false,
+	csNpcEsp = false,
+	csItemEsp = false,
+	csItemKeys = true,
+	csItemBatteries = true,
+	csItemWeapons = true,
+	csItemTapes = true,
+	csItemLoot = true,
+	csItemRange = 400,
 	spyUnique = false,
 	fullbright = false,
 	noFog = false,
@@ -4119,7 +4128,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4360,6 +4369,8 @@ local function buildSwordForge(p)
 			end
 		end)
 
+		local playtime = require(Shared.Config.Playtime)
+		local onlineClaimed = {}
 		every("swordForgeRewards", 10, function()
 			ask(Msg.ClaimDailyAward)
 			for tier = 1, 12 do
@@ -4426,8 +4437,212 @@ local function buildSwordForge(p)
 	end)
 end
 
+local function buildClosingShift(p)
+	local Tags = game:GetService("CollectionService")
+	local KILLER, KILLER_NEAR, NPC = Color3.fromRGB(255, 140, 70), Color3.fromRGB(255, 60, 60), Color3.fromRGB(90, 220, 170)
+	local KEY, BATTERY, WEAPON, TAPE, LOOT = Color3.fromRGB(255, 215, 90), Color3.fromRGB(120, 200, 255), Color3.fromRGB(235, 120, 235), Color3.fromRGB(190, 160, 255), Color3.fromRGB(170, 230, 120)
+	local WARN_RANGE = 40
+	local PARKED_BELOW = -100 -- the game stores idle animatronics under the map
+
+	local function prettyName(inst)
+		local name = inst.Name:gsub("^Ignited", ""):gsub("^Ally", ""):gsub("^CS_", "")
+		return (name:gsub("(%l)(%u)", "%1 %2"))
+	end
+	local function keyLabel(inst)
+		local kind = inst:GetAttribute("Kind")
+		if kind == "RoomKey" then return "Room key" end
+		return type(kind) == "string" and kind or "Key"
+	end
+	local function lootLabel(inst)
+		return inst:GetAttribute("Kind") == "code" and "Vent code" or "Vent loot"
+	end
+	local function tapeLabel(inst)
+		local title = inst:GetAttribute("W439Title")
+		return type(title) == "string" and ("Tape: " .. title) or "Tape"
+	end
+	local function fixed(text)
+		return function() return text end
+	end
+
+	local Specs = {
+		{ tag = "MC_Monster", kind = "killer" }, { tag = "MC_FreddyHunt", kind = "killer" },
+		{ tag = "MC_Amalgamation", kind = "killer" }, { tag = "MC_EndoCrawler", kind = "killer" },
+		{ tag = "CS_SquatterBody", kind = "killer" }, { tag = "MC_Animatronic", kind = "killer" },
+		{ tag = "MC_Ally", kind = "npc" }, { tag = "MC_Jollibee", kind = "npc" },
+		{ tag = "MC_RabbitGreeter", kind = "npc" }, { tag = "CS_NewCast", kind = "npc" },
+		{ tag = "MC_KeyGlint", kind = "item", group = "csItemKeys", colour = KEY, label = keyLabel },
+		{ tag = "MC_Clue", kind = "item", group = "csItemKeys", colour = KEY, label = fixed("Note") },
+		{ tag = "MC_FlashBattery", kind = "item", group = "csItemBatteries", colour = BATTERY, label = fixed("Battery") },
+		{ tag = "MC_ShotgunPickup", kind = "item", group = "csItemWeapons", colour = WEAPON, label = fixed("Shotgun") },
+		{ tag = "MC_MinigunAmmo", kind = "item", group = "csItemWeapons", colour = WEAPON, label = fixed("Minigun ammo") },
+		{ tag = "MC_SniperAmmo", kind = "item", group = "csItemWeapons", colour = WEAPON, label = fixed("Sniper ammo") },
+		{ tag = "MC_ExplosivesCrate", kind = "item", group = "csItemWeapons", colour = WEAPON, label = fixed("Explosives") },
+		{ tag = "CS_W439Tape", kind = "item", group = "csItemTapes", colour = TAPE, label = tapeLabel },
+		{ tag = "MC_VentLoot", kind = "item", group = "csItemLoot", colour = LOOT, label = lootLabel },
+	}
+
+	local visuals = new("Folder", { Name = "VigilClosingShift", Parent = ROOT })
+	local tracked = {}
+
+	local function anchorOf(inst)
+		if inst:IsA("BasePart") then return inst end
+		return inst:FindFirstChild("Hitbox") or inst:FindFirstChild("HumanoidRootPart") or inst:FindFirstChild("RootPart")
+			or inst:FindFirstChild("BonnieRoot") or inst:FindFirstChild("NewCastRoot") or inst.PrimaryPart
+			or inst:FindFirstChildWhichIsA("BasePart", true)
+	end
+
+	local function hide(e)
+		if e.gui then e.gui.Enabled = false end
+		if e.highlight then e.highlight.Enabled = false end
+	end
+
+	local function forget(inst)
+		local e = tracked[inst]
+		if not e then return end
+		if e.gui then e.gui:Destroy() end
+		if e.highlight then e.highlight:Destroy() end
+		tracked[inst] = nil
+	end
+
+	local function track(inst, spec)
+		if tracked[inst] or not (inst:IsA("Model") or inst:IsA("BasePart")) then return end
+		if spec.kind == "npc" and inst:HasTag("MC_Monster") then return end
+		tracked[inst] = { spec = spec }
+	end
+
+	local function makeVisual(e, inst, anchor)
+		local isItem = e.spec.kind == "item"
+		e.gui = new("BillboardGui", {
+			Size = UDim2.fromOffset(200, 36), StudsOffset = Vector3.new(0, isItem and 1.4 or 4.5, 0),
+			AlwaysOnTop = true, LightInfluence = 0, ResetOnSpawn = false, Adornee = anchor, Parent = visuals,
+		})
+		e.name = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, FontFace = Tokens.font,
+			TextSize = isItem and 13 or 15, TextStrokeTransparency = 0.35, Parent = e.gui,
+		})
+		e.info = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+			FontFace = Tokens.mono, TextSize = 11, TextStrokeTransparency = 0.35,
+			TextColor3 = Color3.fromRGB(225, 225, 225), Parent = e.gui,
+		})
+		if not isItem then
+			-- Freddy and Bonnie are invisible rigs wearing a separate skin, which is what must glow
+			local system = inst:GetAttribute("WitheredSystem")
+			local skins = workspace:FindFirstChild("WitheredSkins")
+			local skin = type(system) == "string" and skins and skins:FindFirstChild("Withered" .. system .. "Skin")
+			e.highlight = new("Highlight", {
+				Adornee = skin or inst, FillTransparency = 0.72, OutlineTransparency = 0,
+				DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = visuals,
+			})
+		end
+	end
+
+	local function setIf(object, property, value)
+		if object[property] ~= value then object[property] = value end
+	end
+
+	-- a taken pickup stays in the world with its mesh hidden
+	local function isTaken(e, inst)
+		if inst:GetAttribute("Taken") == true then return true end
+		if inst:IsA("BasePart") then return false end
+		if e.mesh == nil then e.mesh = inst:FindFirstChildWhichIsA("MeshPart") or false end
+		return e.mesh and e.mesh.Transparency >= 1
+	end
+
+	local function enabledFor(spec)
+		if spec.kind == "killer" then return Settings.csKillerEsp end
+		if spec.kind == "npc" then return Settings.csNpcEsp end
+		return Settings.csItemEsp and Settings[spec.group]
+	end
+
+	section(p, "ESP")
+	switch(p, "Killer ESP", "csKillerEsp")
+	switch(p, "NPC ESP", "csNpcEsp")
+	switch(p, "Item ESP", "csItemEsp")
+	local nearestLabel = bind(new("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.6, -16, 0, 18),
+		BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+		TextXAlignment = Enum.TextXAlignment.Right, Text = "None", Parent = (row(p, "Nearest killer")),
+	}), "TextColor3", "muted")
+	note(p, "Killers turn bright red inside 40 studs. Freddy and Bonnie also show what they're doing.")
+
+	section(p, "Items to show")
+	switch(p, "Keys and notes", "csItemKeys")
+	switch(p, "Batteries", "csItemBatteries")
+	switch(p, "Weapons and ammo", "csItemWeapons")
+	switch(p, "Tapes", "csItemTapes")
+	switch(p, "Vent loot", "csItemLoot")
+	slider(p, "Item distance", "csItemRange", 25, 600, 25, function(v) return string.format("%d studs", v) end)
+
+	for _, spec in ipairs(Specs) do
+		for _, inst in ipairs(Tags:GetTagged(spec.tag)) do track(inst, spec) end
+		connect(Tags:GetInstanceAddedSignal(spec.tag), function(inst) track(inst, spec) end)
+		connect(Tags:GetInstanceRemovedSignal(spec.tag), forget)
+	end
+
+	task.spawn(function()
+		while hookState.alive do
+			local camera = workspace.CurrentCamera
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			local origin = (root and root.Position) or (camera and camera.CFrame.Position)
+			local nearestName, nearestDistance
+			for inst, e in pairs(tracked) do
+				if not inst.Parent then
+					forget(inst)
+				elseif not origin or not enabledFor(e.spec) then
+					hide(e)
+				else
+					local spec = e.spec
+					local anchor = anchorOf(inst)
+					local distance = anchor and (anchor.Position - origin).Magnitude
+					local show = anchor ~= nil and anchor.Position.Y > PARKED_BELOW
+					if show and spec.kind == "item" then
+						show = distance <= Settings.csItemRange and not isTaken(e, inst)
+					end
+					if not show then
+						hide(e)
+					else
+						if not e.gui then makeVisual(e, inst, anchor) end
+						setIf(e.gui, "Adornee", anchor)
+						setIf(e.gui, "Enabled", true)
+						local name, info, colour = "", string.format("%d studs", distance), spec.colour
+						if spec.kind == "item" then
+							name = spec.label(inst)
+						else
+							name = prettyName(inst)
+							if spec.kind == "npc" then
+								colour = NPC
+							else
+								local near = distance <= WARN_RANGE
+								colour = near and KILLER_NEAR or KILLER
+								local system = inst:GetAttribute("WitheredSystem") or inst.Name:gsub("^Ignited", "")
+								local phase = workspace:GetAttribute(system .. "Phase")
+								if type(phase) == "string" and phase ~= "" then info ..= " - " .. phase end
+								if not nearestDistance or distance < nearestDistance then
+									nearestName, nearestDistance = name, distance
+								end
+							end
+						end
+						setIf(e.name, "Text", name)
+						setIf(e.info, "Text", info)
+						setIf(e.name, "TextColor3", colour)
+						if e.highlight then
+							setIf(e.highlight, "FillColor", colour)
+							setIf(e.highlight, "OutlineColor", colour)
+							setIf(e.highlight, "Enabled", true)
+						end
+					end
+				end
+			end
+			setIf(nearestLabel, "Text", nearestName and string.format("%s, %d studs", nearestName, nearestDistance) or "None")
+			task.wait(0.15)
+		end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Closing Shift", gameId = 10767355485, placeId = 118297934142609, build = buildClosingShift },
 	{ name = "+1 Sword Forge", gameId = 10758912149, placeId = 93239606899307, build = buildSwordForge },
 }
 
