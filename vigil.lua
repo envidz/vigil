@@ -444,12 +444,13 @@ end)
 end)
 connect(target.MouseLeave, hideTip)
 end
+local toastPad = padding(4, 18, 4, 18)
 local toastFrame = new("Frame", {
 AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0), Visible = false, ZIndex = 60,
 AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -24),
 BorderSizePixel = 0, Parent = menuGui,
 }, {
-round("full"), padding(4, 6, 4, 18),
+round("full"), toastPad,
 new("UIListLayout", {
 FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, Tokens.space.md),
 VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder,
@@ -487,6 +488,7 @@ toastToken += 1
 local mine = toastToken
 toastLabel.Text = text
 toastAction.Visible = actionText ~= nil
+toastPad.PaddingRight = UDim.new(0, actionText and 6 or 18) -- the Undo button sits close to the edge; plain text is centred
 toastAction.Text = actionText or ""
 toastCallback = action
 if toastFrame.Visible then
