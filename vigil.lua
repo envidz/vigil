@@ -145,6 +145,7 @@ spyRecord = false,
 spyOutgoing = true,
 spyIncoming = true,
 spyHideNoise = true,
+swordForgeTrain = false,
 spyUnique = false,
 fullbright = false,
 noFog = false,
@@ -1473,10 +1474,23 @@ slider(movementPage, "Fly speed", "flySpeed", 10, 300, 5, function(v) return str
 section(movementPage, "Other")
 switch(movementPage, "Noclip", "noclip")
 switch(movementPage, "Ctrl-click teleport", "clickTp")
+UI.inSwordForge = game.GameId == 10758912149
+if UI.inSwordForge then
+local gamesPage = page("games")
+section(gamesPage, "+1 Sword Forge")
+switch(gamesPage, "Auto train", "swordForgeTrain")
+UI.swordGain = bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.5, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = (row(gamesPage, "Power gained")),
+}), "TextColor3", "muted")
+note(gamesPage, "Trains at the same speed as holding the train button. It pauses on training grounds, where power comes in by itself.")
+else
 bind(new("TextLabel", {
 Size = UDim2.new(1, 0, 0, 280), BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = 18,
 Text = "Coming soon, join discord for news", TextWrapped = true, Parent = page("games"),
 }), "TextColor3", "muted")
+end
 local settingsPage = page("settings")
 section(settingsPage, "Presets")
 do
@@ -3569,7 +3583,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -3701,6 +3715,41 @@ end
 connect(btn.Activated, b[2])
 end
 return detail
+end
+if UI.inSwordForge then
+task.spawn(function()
+local ClickDelay = 0.11 -- the game's own hold-to-train speed
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared", 30)
+local loaded, Net, Msg, feedback = pcall(function()
+local client = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client")
+return require(Shared.Net.Net), require(Shared.Net.Protocol).Msg, require(client:WaitForChild("TrainingFeedback"))
+end)
+if not loaded then
+UI.swordGain.Text = "Unavailable"
+return
+end
+local function canTrain()
+if LocalPlayer:GetAttribute("HollowFPS") or LocalPlayer:GetAttribute("IntroState") == "Playing" then return false end
+if LocalPlayer:GetAttribute("QuarryOnMyPlot") == true then return false end
+return feedback.GetGround() <= 0
+end
+local gained, last, shownAt = 0, LocalPlayer:GetAttribute("Power") or 0, 0
+while hookState.alive do
+local power = LocalPlayer:GetAttribute("Power") or last
+if Settings.swordForgeTrain then
+if power > last then gained += power - last end
+local ok, allowed = pcall(canTrain)
+if ok and allowed then pcall(Net.FireServer, Msg.TrainManualClick) end
+end
+last = power
+local now = os.clock()
+if now - shownAt > 0.5 then
+shownAt = now
+UI.swordGain.Text = string.format("%d", gained)
+end
+task.wait(ClickDelay)
+end
+end)
 end
 do
 local spy = UI.spy
