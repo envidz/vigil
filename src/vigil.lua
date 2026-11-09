@@ -1184,7 +1184,9 @@ local function navItem(id, y)
 		}), "TextColor3", "muted")
 	end
 	nav[id] = item
-	connect(b.Activated, function() selectTab(id) end)
+	connect(b.Activated, function()
+		if id == "spy" then UI.toggleSpy() else selectTab(id) end -- Remote spy has its own window
+	end)
 end
 
 local navY = 0
@@ -3998,7 +4000,9 @@ connect(UserInputService.InputBegan, function(input)
 	if panicSaved then
 		for k, v in pairs(panicSaved) do Settings[k] = v end
 		panicSaved = nil
+		UI.spyPanic(false)
 	else
+		UI.spyPanic(true)
 		panicSaved = {}
 		for _, k in ipairs(PANIC_KEYS) do
 			panicSaved[k] = Settings[k]
@@ -4140,11 +4144,12 @@ local function listRow(box, order, titleText, detailText, buttons, userId)
 	return detail
 end
 
--- Remote spy page --------------------------------------------------------------
+-- Remote spy window --------------------------------------------------------------
 do
 local spy = UI.spy
-local spyPage = page("spy")
-local MAX_ROWS = 60
+local MAX_ROWS = 100
+local MIN_W, MIN_H = 600, 340
+local HEADER, TOOLBAR = 46, 38
 local Tags = { out = "SEND", call = "CALL", ["in"] = "RECV" }
 
 local function copy(text, message)
@@ -4153,50 +4158,62 @@ local function copy(text, message)
 	toast(message)
 end
 
-section(spyPage, "Capture")
-if canHook then
-	switch(spyPage, "Calls sent to the server", "spyOutgoing")
-else
-	note(spyPage, "Calls sent to the server can't be logged because this executor can't hook game functions.")
-end
-switch(spyPage, "Events from the server", "spyIncoming")
-local filter = inputRow(spyPage, "Filter by name", "Remote name")
-local statusRow = row(spyPage, "Logged")
-local status = bind(new("TextLabel", {
-	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.5, -16, 0, 18),
-	BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
-	TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = statusRow,
-}), "TextColor3", "muted")
+local root = new("Frame", {
+	Name = "RemoteSpy", Size = UDim2.fromOffset(760, 480), Position = UDim2.fromOffset(80, 90), BorderSizePixel = 0,
+	Active = true, Visible = false, ZIndex = 20, Parent = menuGui,
+}, { round(Tokens.radius.lg) })
+bind(root, "BackgroundColor3", "bg")
+bind(new("UIStroke", { Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = root }), "Color", "border")
 
-section(spyPage, "Log")
-local box = listBox(spyPage)
-
-local empty = new("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, LayoutOrder = 0, Parent = box })
+-- Header: drag handle, title, recording control, close
+local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER), BackgroundTransparency = 1, Active = true, Parent = root })
 bind(new("TextLabel", {
-	Size = UDim2.new(1, -32, 1, 0), Position = UDim2.fromOffset(16, 0), BackgroundTransparency = 1,
-	FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "Nothing logged. Turn on the switch at the top, then play.", Parent = empty,
+	Text = "Remote spy", FontFace = Tokens.fontStrong, TextSize = 16, BackgroundTransparency = 1,
+	TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(18, 0), Size = UDim2.fromOffset(100, HEADER), Parent = header,
+}), "TextColor3", "text")
+local status = bind(new("TextLabel", {
+	Text = "0 logged", FontFace = Tokens.mono, TextSize = 11, BackgroundTransparency = 1,
+	TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(122, 0), Size = UDim2.new(1, -280, 0, HEADER), Parent = header,
 }), "TextColor3", "muted")
 
--- the open row's details sit right under it
-local detail = new("Frame", {
-	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false, Parent = box,
-}, { padding(2, 16, 14, 16), new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 10) }) })
-local detailText = new("TextBox", {
-	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextEditable = false, ClearTextOnFocus = false, MultiLine = true,
-	TextWrapped = true, FontFace = Tokens.mono, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top, BorderSizePixel = 0, Text = "", LayoutOrder = 1, Parent = detail,
-}, { round(Tokens.radius.md), padding(10, 12) })
-bind(detailText, "BackgroundColor3", "raised")
-bind(detailText, "TextColor3", "text")
-local detailButtons = new("Frame", {
-	Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = 2, Parent = detail,
-}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+local record = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -46, 0.5, 0), Size = UDim2.fromOffset(92, 28), BorderSizePixel = 0,
+	FontFace = Tokens.font, TextSize = Tokens.text.small, AutoButtonColor = false, Parent = header,
+}, { round("full") })
+pressable(record)
+connect(record.Activated, function()
+	Settings.spyRecord = not Settings.spyRecord
+	save()
+	applyTheme()
+end)
 
-local function detailButton(order, text, onClick)
+local closeBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(26, 26), BackgroundTransparency = 1,
+	BorderSizePixel = 0, Text = "", AutoButtonColor = false, Parent = header,
+}, { round("full") })
+bind(closeBtn, "BackgroundColor3", "text")
+do
+	local image, paint = iconImage("close", 14, closeBtn)
+	image.AnchorPoint = Vector2.new(0.5, 0.5)
+	image.Position = UDim2.fromScale(0.5, 0.5)
+	onTheme(function() paint(P.muted) end)
+	connect(closeBtn.MouseEnter, function() tween(closeBtn, { BackgroundTransparency = 0.9 }, 0.12) end)
+	connect(closeBtn.MouseLeave, function() tween(closeBtn, { BackgroundTransparency = 1 }, 0.12) end)
+	connect(closeBtn.Activated, function() root.Visible = false end)
+end
+
+-- Toolbar
+local toolbar = new("Frame", {
+	Position = UDim2.fromOffset(14, HEADER), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1, Parent = root,
+}, { new("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+	VerticalAlignment = Enum.VerticalAlignment.Center,
+}) })
+
+local function pillButton(parent, order, text, onClick)
 	local btn = new("TextButton", {
-		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Text = text, FontFace = Tokens.font,
-		TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order, Parent = detailButtons,
+		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 0, 28), Text = text, FontFace = Tokens.font,
+		TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order, Parent = parent,
 	}, { round("full"), padding(0, 11) })
 	bind(btn, "BackgroundColor3", "raised")
 	bind(btn, "TextColor3", "text")
@@ -4207,27 +4224,108 @@ local function detailButton(order, text, onClick)
 	return btn
 end
 
-local function closeEntry()
-	spy.open = nil
-	detail.Visible = false
-	spy.dirty = true
+-- a pill that shows a setting; lit while it is on
+local chipRenders = {}
+local function chip(order, text, key)
+	local btn = new("TextButton", {
+		AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 0, 28), Text = text, FontFace = Tokens.font,
+		TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order, Parent = toolbar,
+	}, { round("full"), padding(0, 11) })
+	pressable(btn)
+	local function render()
+		btn.BackgroundColor3 = Settings[key] and P.accent or P.raised
+		btn.TextColor3 = Settings[key] and P.onAccent or P.muted
+	end
+	connect(btn.Activated, function()
+		Settings[key] = not Settings[key]
+		save()
+		render()
+	end)
+	table.insert(chipRenders, render)
+	onTheme(render)
+	return btn
 end
 
-local copyMain = detailButton(1, "Copy call", function()
+if canHook then chip(1, "Sent", "spyOutgoing") end
+chip(2, "Received", "spyIncoming")
+
+local filter = new("TextBox", {
+	Size = UDim2.fromOffset(150, 28), Text = "", PlaceholderText = "Filter by name", ClearTextOnFocus = false, FontFace = Tokens.fontRegular,
+	TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+	BorderSizePixel = 0, LayoutOrder = 3, Parent = toolbar,
+}, { round(Tokens.radius.md), padding(0, 10) })
+bind(filter, "BackgroundColor3", "raised")
+bind(filter, "TextColor3", "text")
+bind(filter, "PlaceholderColor3", "muted")
+
+-- Log on the left, the chosen call on the right
+local BODY_Y = HEADER + TOOLBAR
+local list = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(14, BODY_Y), Size = UDim2.new(0.5, -18, 1, -(BODY_Y + 14)), BorderSizePixel = 0, ScrollBarThickness = 4,
+	ScrollBarImageTransparency = 0.6, ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	CanvasSize = UDim2.new(), Parent = root,
+}, { round(Tokens.radius.card), new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }) })
+bind(list, "BackgroundColor3", "card")
+bind(list, "ScrollBarImageColor3", "text")
+
+local empty = bind(new("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 90), BackgroundTransparency = 1, FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1, TextWrapped = true,
+	Text = "Nothing logged. Press Record, then play.", LayoutOrder = 0, Parent = list,
+}, { padding(0, 16) }), "TextColor3", "muted")
+
+local pane = new("Frame", {
+	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, BODY_Y), Size = UDim2.new(0.5, -18, 1, -(BODY_Y + 14)),
+	BorderSizePixel = 0, Parent = root,
+}, { round(Tokens.radius.card) })
+bind(pane, "BackgroundColor3", "card")
+
+local hint = bind(new("TextLabel", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1, TextWrapped = true,
+	Text = "Click a call to see it here.", Parent = pane,
+}, { padding(0, 16) }), "TextColor3", "muted")
+
+local detailScroll = new("ScrollingFrame", {
+	Size = UDim2.new(1, 0, 1, -46), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageTransparency = 0.6,
+	ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), Visible = false, Parent = pane,
+}, { padding(12, 14) })
+bind(detailScroll, "ScrollBarImageColor3", "text")
+local detailText = new("TextBox", {
+	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, TextEditable = false, ClearTextOnFocus = false,
+	MultiLine = true, TextWrapped = true, FontFace = Tokens.mono, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top, BorderSizePixel = 0, Text = "", Parent = detailScroll,
+})
+bind(detailText, "TextColor3", "text")
+
+local actions = new("Frame", {
+	AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 10, 1, -9), Size = UDim2.new(1, -20, 0, 28), BackgroundTransparency = 1, Visible = false, Parent = pane,
+}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+
+local paintAll -- repaints the selected row
+
+local function closeEntry()
+	spy.open = nil
+	detailScroll.Visible = false
+	actions.Visible = false
+	hint.Visible = true
+	spy.dirty = true
+	if paintAll then paintAll() end
+end
+
+local copyMain = pillButton(actions, 1, "Copy call", function()
 	local e = spy.open
 	if e then copy(spy.copyOne(e), e.kind == "in" and "Data copied" or "Call copied") end
 end)
-local copyReply = detailButton(2, "Copy reply", function()
+local copyReply = pillButton(actions, 2, "Copy reply", function()
 	local e = spy.open
 	if not e then return end
 	local reply = spy.replyText(e)
 	if reply then copy(reply, "Reply copied") else toast("The server hasn't replied yet.") end
 end)
-detailButton(3, "Copy path", function()
+pillButton(actions, 3, "Copy path", function()
 	local e = spy.open
 	if e then copy(spy.path(e.remote) or e.remote.Name, "Path copied") end
 end)
-detailButton(4, "Ignore", function()
+pillButton(actions, 4, "Ignore", function()
 	local e = spy.open
 	if not e then return end
 	local remote = e.remote
@@ -4239,46 +4337,58 @@ detailButton(4, "Ignore", function()
 	toast("Ignoring " .. remote.Name, "Undo", function() spy.muted[remote] = nil end)
 end)
 
-local function openEntry(entry, r)
+local function openEntry(entry)
 	spy.open = entry
-	detail.LayoutOrder = r.LayoutOrder + 1
 	detailText.Text = spy.describe(entry)
+	detailScroll.CanvasPosition = Vector2.zero
 	copyMain.Text = entry.kind == "in" and "Copy data" or "Copy call"
 	copyReply.Visible = entry.kind == "call"
-	detail.Visible = true
+	hint.Visible = false
+	detailScroll.Visible = true
+	actions.Visible = true
+	paintAll()
 end
 
 local rows = {}
+
+local function paintRow(item)
+	local chosen = item.entry ~= nil and item.entry == spy.open
+	item.frame.BackgroundTransparency = chosen and 0.2 or (item.hovered and 0.6 or 1)
+end
+
+function paintAll()
+	for _, item in ipairs(rows) do paintRow(item) end
+end
+
 local function rowAt(i)
 	if rows[i] then return rows[i] end
 	local r = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
-		LayoutOrder = i * 2, Parent = box,
+		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+		LayoutOrder = i, Parent = list,
 	})
 	bind(r, "BackgroundColor3", "raised")
-	if i > 1 then hairline(r) end
-	local item = { frame = r }
+	local item = { frame = r, hovered = false }
 	item.tag = bind(new("TextLabel", {
-		Size = UDim2.fromOffset(40, 36), Position = UDim2.fromOffset(16, 0), BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = 10,
+		Size = UDim2.fromOffset(36, 44), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = 10,
 		TextXAlignment = Enum.TextXAlignment.Left, Parent = r,
 	}), "TextColor3", "muted")
 	item.name = bind(new("TextLabel", {
-		Size = UDim2.new(0.42, -60, 0, 36), Position = UDim2.fromOffset(60, 0), BackgroundTransparency = 1, FontFace = Tokens.font,
+		Size = UDim2.new(1, -106, 0, 18), Position = UDim2.fromOffset(50, 6), BackgroundTransparency = 1, FontFace = Tokens.font,
 		TextSize = Tokens.text.body, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
 	}), "TextColor3", "text")
 	item.preview = bind(new("TextLabel", {
-		Size = UDim2.new(0.58, -64, 0, 36), Position = UDim2.new(0.42, 8, 0, 0), BackgroundTransparency = 1, FontFace = Tokens.mono,
+		Size = UDim2.new(1, -62, 0, 14), Position = UDim2.fromOffset(50, 24), BackgroundTransparency = 1, FontFace = Tokens.mono,
 		TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
 	}), "TextColor3", "muted")
 	item.count = bind(new("TextLabel", {
-		AnchorPoint = Vector2.new(1, 0), Size = UDim2.fromOffset(46, 36), Position = UDim2.new(1, -14, 0, 0), BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0), Size = UDim2.fromOffset(46, 18), Position = UDim2.new(1, -12, 0, 6), BackgroundTransparency = 1,
 		FontFace = Tokens.mono, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, Parent = r,
 	}), "TextColor3", "muted")
-	connect(r.MouseEnter, function() tween(r, { BackgroundTransparency = 0.5 }, 0.1) end)
-	connect(r.MouseLeave, function() tween(r, { BackgroundTransparency = 1 }, 0.1) end)
+	connect(r.MouseEnter, function() item.hovered = true; paintRow(item) end)
+	connect(r.MouseLeave, function() item.hovered = false; paintRow(item) end)
 	connect(r.Activated, function()
 		if not item.entry then return end
-		if spy.open == item.entry then closeEntry() else openEntry(item.entry, r) end
+		if spy.open == item.entry then closeEntry() else openEntry(item.entry) end
 	end)
 	rows[i] = item
 	return item
@@ -4298,56 +4408,107 @@ end
 
 local function refresh()
 	spy.dirty = false
-	local list = matches()
-	local shown = math.min(#list, MAX_ROWS)
+	local found = matches()
+	local shown = math.min(#found, MAX_ROWS)
 	for i = 1, shown do
-		local item, e = rowAt(i), list[i]
+		local item, e = rowAt(i), found[i]
 		item.entry = e
 		item.tag.Text = Tags[e.kind]
 		item.name.Text = e.name
 		item.preview.Text = spy.preview(e)
 		item.count.Text = e.waiting and "wait" or (e.count > 1 and ("x" .. e.count) or "")
 		item.frame.Visible = true
+		paintRow(item)
 	end
 	for i = shown + 1, #rows do
 		rows[i].entry = nil
 		rows[i].frame.Visible = false
 	end
 	empty.Visible = shown == 0
-	status.Text = #list == #spy.log and tostring(#list) or (#list .. " of " .. #spy.log)
+	status.Text = (#found == #spy.log and #found or (#found .. " of " .. #spy.log)) .. " logged"
 end
 
 connect(filter:GetPropertyChangedSignal("Text"), function() spy.dirty = true end)
 
-section(spyPage, "Manage")
-buttonRow(spyPage, "Log", {
-	{ "Copy all", function()
-		local list = matches()
-		if #list == 0 then return toast("Nothing to copy yet.") end
-		copy(spy.copyAll(list), #list .. " copied")
-	end },
-	{ "Clear", function()
-		table.clear(spy.log)
-		closeEntry()
-		toast("Log cleared")
-	end },
-	{ "Stop ignoring", function()
-		table.clear(spy.muted)
-		toast("Nothing is ignored now")
-	end },
+pillButton(toolbar, 4, "Copy all", function()
+	local found = matches()
+	if #found == 0 then return toast("Nothing to copy yet.") end
+	copy(spy.copyAll(found), #found .. " copied")
+end)
+pillButton(toolbar, 5, "Clear", function()
+	table.clear(spy.log)
+	closeEntry()
+	toast("Log cleared")
+end)
+pillButton(toolbar, 6, "Stop ignoring", function()
+	table.clear(spy.muted)
+	toast("Nothing is ignored now")
+end)
+
+onTheme(function()
+	local on = Settings.spyRecord
+	record.Text = on and "Recording" or "Record"
+	record.BackgroundColor3 = on and P.accent or P.raised
+	record.TextColor3 = on and P.onAccent or P.text
+end)
+
+-- Moving and resizing
+local grip = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0), Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1, Text = "", ZIndex = 3, Parent = root,
 })
-note(spyPage, "The list holds still while a row is open, so you can read it. Close the row to catch up.")
+bind(new("Frame", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -5, 1, -5), Size = UDim2.fromOffset(9, 2), BorderSizePixel = 0, Parent = grip }), "BackgroundColor3", "muted")
+bind(new("Frame", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -5, 1, -5), Size = UDim2.fromOffset(2, 9), BorderSizePixel = 0, Parent = grip }), "BackgroundColor3", "muted")
+
+local held
+local function begin(mode, input)
+	if isPointer(input) then
+		held = { mode = mode, from = input.Position, pos = root.Position, size = root.Size }
+	end
+end
+connect(header.InputBegan, function(input) begin("move", input) end)
+connect(grip.InputBegan, function(input) begin("size", input) end)
+connect(UserInputService.InputChanged, function(input)
+	if not held or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+	local dx, dy = input.Position.X - held.from.X, input.Position.Y - held.from.Y
+	local screen = menuGui.AbsoluteSize
+	if held.mode == "move" then
+		-- at least the header always stays on screen, so it can be dragged back
+		local x = math.clamp(held.pos.X.Offset + dx, 100 - held.size.X.Offset, math.max(100 - held.size.X.Offset, screen.X - 100))
+		local y = math.clamp(held.pos.Y.Offset + dy, 0, math.max(0, screen.Y - HEADER))
+		root.Position = UDim2.fromOffset(x, y)
+	else
+		root.Size = UDim2.fromOffset(
+			math.clamp(held.size.X.Offset + dx, MIN_W, math.max(MIN_W, screen.X)),
+			math.clamp(held.size.Y.Offset + dy, MIN_H, math.max(MIN_H, screen.Y))
+		)
+	end
+end)
+connect(UserInputService.InputEnded, function(input)
+	if isPointer(input) then held = nil end
+end)
+
+function UI.toggleSpy()
+	root.Visible = not root.Visible
+	if root.Visible then spy.dirty = true end
+end
+
+-- The panic key hides the window and the next press brings it back
+local openBeforePanic = false
+function UI.spyPanic(hide)
+	if hide then
+		openBeforePanic = root.Visible
+		root.Visible = false
+	else
+		root.Visible = openBeforePanic
+	end
+end
 
 task.spawn(function()
 	while hookState.alive do
 		spy.sync()
 		local open = spy.open
-		if open then
-			if open.kind == "call" and open.reply and not open.replyShown then detailText.Text = spy.describe(open) end
-			status.Text = "Paused while a row is open"
-		elseif spy.dirty and spyPage.Visible then
-			pcall(refresh)
-		end
+		if open and open.kind == "call" and open.reply and not open.replyShown then detailText.Text = spy.describe(open) end
+		if spy.dirty and root.Visible then pcall(refresh) end
 		task.wait(0.25)
 	end
 end)
