@@ -169,6 +169,12 @@ local Settings = {
 	spyIncoming = true,
 	spyHideNoise = true,
 	swordForgeTrain = false,
+	swordForgeCollect = false,
+	swordForgeRewards = false,
+	swordForgeEquip = false,
+	swordForgeUpgrades = false,
+	swordForgeSell = false,
+	swordForgeRebirth = false,
 	spyUnique = false,
 	fullbright = false,
 	noFog = false,
@@ -4113,7 +4119,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4281,11 +4287,40 @@ local function buildSwordForge(p)
 		TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = (row(p, "Power gained")),
 	}), "TextColor3", "muted")
 	note(p, "Trains at the same speed as holding the train button. It pauses on training grounds, where power comes in by itself.")
+	local canCollect = typeof(fireproximityprompt) == "function"
+	if canCollect then switch(p, "Auto collect drops", "swordForgeCollect") end
+
+	local Net, Msg
+
+	section(p, "Rewards")
+	switch(p, "Auto claim rewards", "swordForgeRewards")
+	note(p, "Claims daily, online, offline, playtime, index and shrine rewards as they become ready.")
+	buttonRow(p, "Codes", { { "Redeem all", function()
+		if not Net then return toast("Still loading. Try again in a moment.") end
+		toast("Redeeming codes")
+		task.spawn(function()
+			local codes = { "MINING", "SEASON1", "67CCU", "BROM", "RUNIC", "UPPERMOON" }
+			local redeemed = 0
+			for _, code in ipairs(codes) do
+				local ok, result = pcall(Net.InvokeServer, Msg.RedeemCode, code)
+				if ok and type(result) == "table" and result.ok then redeemed += 1 end
+				task.wait(0.6)
+			end
+			toast(redeemed > 0 and (redeemed .. " new codes redeemed") or "No new codes to redeem")
+		end)
+	end } })
+
+	section(p, "Progress")
+	switch(p, "Auto equip best gear", "swordForgeEquip")
+	switch(p, "Auto buy upgrades", "swordForgeUpgrades")
+	switch(p, "Auto sell materials", "swordForgeSell")
+	switch(p, "Auto rebirth", "swordForgeRebirth")
+	note(p, "Auto buy spends your gold, auto sell sells every material, and auto rebirth resets your progress whenever a rebirth is ready.")
 
 	task.spawn(function()
 		local ClickDelay = 0.11 -- the game's own hold-to-train speed
 		local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared", 30)
-		local loaded, Net, Msg, feedback = pcall(function()
+		local loaded, netModule, messages, feedback = pcall(function()
 			local client = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client")
 			return require(Shared.Net.Net), require(Shared.Net.Protocol).Msg, require(client:WaitForChild("TrainingFeedback"))
 		end)
@@ -4293,6 +4328,70 @@ local function buildSwordForge(p)
 			gainLabel.Text = "Unavailable"
 			return
 		end
+		Net, Msg = netModule, messages
+
+		local function every(key, seconds, job)
+			task.spawn(function()
+				while hookState.alive do
+					if Settings[key] then pcall(job) end
+					task.wait(seconds)
+				end
+			end)
+		end
+		local function ask(...)
+			return pcall(Net.InvokeServer, ...)
+		end
+
+		every("swordForgeCollect", 0.5, function()
+			local folder = workspace:FindFirstChild("DropsClient")
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not folder or not root then return end
+			for _, drop in ipairs(folder:GetChildren()) do
+				local prompt = drop:FindFirstChild("PickupPrompt")
+				if prompt and drop:IsA("BasePart") and (drop.Position - root.Position).Magnitude <= prompt.MaxActivationDistance then
+					fireproximityprompt(prompt)
+				end
+			end
+		end)
+
+		local playtime = require(Shared.Config.Playtime)
+		local onlineClaimed = {}
+		every("swordForgeRewards", 30, function()
+			ask(Msg.ClaimDailyAward)
+			for tier = 1, 12 do
+				if not onlineClaimed[tier] then
+					local ok, result = ask(Msg.ClaimOnlineAward, tier)
+					if ok and type(result) == "table" and result.ok then onlineClaimed[tier] = true end
+					task.wait(0.2)
+				end
+			end
+			ask(Msg.OfflineRewardClaim)
+			local got, info = ask(Msg.PlaytimeInfo)
+			if got and type(info) == "table" and info.ok and type(info.claimed) == "table" then
+				for tier = 1, #playtime.Tiers do
+					if not info.claimed[tier] and (info.seconds or 0) >= playtime.TierSeconds(tier, info.cycle) then
+						ask(Msg.PlaytimeClaim, tier)
+						task.wait(0.2)
+					end
+				end
+			end
+			ask(Msg.IndexClaimLevel)
+			ask(Msg.ShrineCollect)
+		end)
+
+		every("swordForgeEquip", 20, function() ask(Msg.InvEquipBest) end)
+
+		local upgrades = require(Shared.Config.Upgrades)
+		every("swordForgeUpgrades", 1.5, function()
+			for _, key in ipairs(upgrades.Order) do
+				if not Settings.swordForgeUpgrades then return end
+				ask(Msg.UpgradeBuy, key, false)
+				task.wait(0.4)
+			end
+		end)
+
+		every("swordForgeSell", 45, function() ask(Msg.SellMaterial, { all = true }) end)
+		every("swordForgeRebirth", 10, function() ask(Msg.PlayerRebirth) end)
 
 		-- the same moments the game itself sends no click
 		local function canTrain()
