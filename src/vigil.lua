@@ -423,6 +423,7 @@ local ICONS = {
 	search = "rbxassetid://10734943674",
 	close = "rbxassetid://10747384394",
 	eye = "rbxassetid://10723346959",
+	games = "rbxassetid://10723395215",
 	discord = "rbxthumb://type=Asset&id=132364423955781&w=150&h=150",
 }
 
@@ -1096,6 +1097,7 @@ local tabs = {
 	{ id = "visuals", title = "Visuals", sub = "Changes how the world looks on your screen." },
 	{ id = "movement", title = "Movement", sub = "Changes how your character gets around." },
 	{ id = "players", title = "Players", sub = "Everyone in this server." },
+	{ id = "games", title = "Games", sub = "Scripts made for specific games." },
 	{ id = "settings", title = "Settings", sub = "Presets, appearance, keys and configs." },
 }
 local tabById = {}
@@ -1103,7 +1105,7 @@ for _, tab in ipairs(tabs) do tabById[tab.id] = tab end
 local GROUPS = {
 	{ "Combat", { "aim", "silent", "trigger" } },
 	{ "Sight", { "esp", "visuals" } },
-	{ "World", { "movement", "players" } },
+	{ "World", { "movement", "players", "games" } },
 }
 
 -- the big switch beside the page title, shared by every page that has one
@@ -1712,6 +1714,12 @@ section(movementPage, "Other")
 switch(movementPage, "Noclip", "noclip")
 switch(movementPage, "Ctrl-click teleport", "clickTp")
 
+-- Games page
+bind(new("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 280), BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = 18,
+	Text = "Coming soon, join discord for news", TextWrapped = true, Parent = page("games"),
+}), "TextColor3", "muted")
+
 -- Settings page
 local settingsPage = page("settings")
 section(settingsPage, "Presets")
@@ -1831,7 +1839,7 @@ do
 		connect(b.InputBegan, function(input)
 			if not isPointer(input) then return end
 			if xOn and yOn then
-				if os.clock() - lastCornerClick < 0.32 then
+				if os.clock() - lastCornerClick < 0.4 then
 					lastCornerClick = 0
 					local w0, h0 = Holder.Size.X.Offset, Holder.Size.Y.Offset
 					wantW, wantH = DEF_W, DEF_H
@@ -3259,7 +3267,7 @@ end
 function aimStep(camera, mouse, dt)
 	if Settings.aimMode ~= "Toggle" or not Settings.aimEnabled then aimToggled = false end
 	local active = false
-	if Settings.aimEnabled and not keyCapture and not UserInputService:GetFocusedTextBox() then
+	if Settings.aimEnabled and not keyCapture and not Holder.Visible and not UserInputService:GetFocusedTextBox() then
 		if Settings.aimMode == "Always" then
 			active = true
 		elseif Settings.aimMode == "Toggle" then
@@ -3297,6 +3305,8 @@ function aimStep(camera, mouse, dt)
 	end
 
 	if method == "Mouse" and canMoveMouse then
+		-- with a free cursor (a game menu, say) only a held key may move it
+		if Settings.aimMode ~= "Hold" and UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return end
 		mouseAim(camera, aimPos, Settings.smoothing <= 1 and 0.6 or alpha * 0.6)
 	else
 		local cf = camera.CFrame
@@ -3314,7 +3324,28 @@ do
 --------------------------------------------------------------------------------
 
 hookState = { alive = true }
-silent = { active = false, mouse = Vector2.zero, inset = Vector2.zero }
+silent = { active = false, mouse = Vector2.zero, inset = Vector2.zero, roll = true, rolledAt = 0, guiPress = false, releasedAt = 0 }
+
+-- True only while the player is shooting. Without this the hooks would feed the target
+-- to everything in the game that reads the mouse: custom cursors, menus, head tracking.
+-- A direct call, because the hooks run inside the game's own metamethods.
+local isPressed = UserInputService.IsMouseButtonPressed
+local LEFT_MOUSE = Enum.UserInputType.MouseButton1
+local function shooting()
+	if touchOnly then return true end
+	if isPressed(UserInputService, LEFT_MOUSE) then return not silent.guiPress end
+	return os.clock() - silent.releasedAt < 0.12 -- some games fire a moment after the release
+end
+
+-- A press that lands on a button or menu is not a shot, and stays that way until released
+connect(UserInputService.InputBegan, function(input, gameProcessed)
+	if input.UserInputType == LEFT_MOUSE then silent.guiPress = gameProcessed end
+end)
+connect(UserInputService.InputEnded, function(input)
+	if input.UserInputType ~= LEFT_MOUSE then return end
+	if not silent.guiPress then silent.releasedAt = os.clock() end
+	silent.guiPress = false
+end)
 
 local silentCircle, silentStroke = circle(true)
 local marker = new("Frame", {
@@ -3329,7 +3360,7 @@ function silentStep(camera, mouse)
 
 	local enabled = canHook and Settings.silentEnabled
 	local part
-	if enabled then
+	if enabled and not Holder.Visible then
 		local _
 		_, part = findTarget(camera, mouse, {
 			part = Settings.silentPart, team = Settings.silentTeamCheck, visible = Settings.silentVisibleOnly,
@@ -3356,8 +3387,13 @@ function silentStep(camera, mouse)
 	silent.aimPoint = mouseRay.Origin + mouseRay.Direction * 1000
 	silent.hitCFrame = CFrame.lookAt(pos, pos + unit)
 	silent.unitRay = Ray.new(camPos, unit)
-	silent.screen = Vector2.new(screen.X, screen.Y) - inset
-	silent.active = math.random(1, 100) <= Settings.hitChance
+	-- the roll is held for a moment, so hit chance decides per shot and never flickers per frame
+	local now = os.clock()
+	if now - silent.rolledAt > 0.15 then
+		silent.rolledAt = now
+		silent.roll = math.random(1, 100) <= Settings.hitChance
+	end
+	silent.active = silent.roll
 
 	marker.Visible = Settings.showSilentTarget
 	marker.Position = UDim2.fromOffset(screen.X, screen.Y)
@@ -3375,6 +3411,8 @@ local function redirect(origin, direction)
 end
 
 local RayMethods = { FindPartOnRay = true, FindPartOnRayWithIgnoreList = true, FindPartOnRayWithWhitelist = true }
+local MouseSpoof = { Hit = true, Target = true, UnitRay = true }
+local Redirected = { Raycast = true, FindPartOnRay = true, FindPartOnRayWithIgnoreList = true, FindPartOnRayWithWhitelist = true, ViewportPointToRay = true, ScreenPointToRay = true }
 
 if canHook then
 	local wrap = typeof(newcclosure) == "function" and newcclosure or function(f) return f end
@@ -3383,6 +3421,9 @@ if canHook then
 	oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
 		if hookState.alive and silent.active and not checkcaller() then
 			local method = getnamecallmethod()
+			if not Redirected[method] or not shooting() then
+				return oldNamecall(self, ...)
+			end
 			if method == "Raycast" and Settings.silentRaycast then
 				local origin, direction = ...
 				if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
@@ -3418,18 +3459,15 @@ if canHook then
 	local mouseObject = LocalPlayer:GetMouse()
 	local oldIndex
 	oldIndex = hookmetamethod(game, "__index", wrap(function(self, key)
-		if hookState.alive and silent.active and rawequal(self, mouseObject) and Settings.silentMouse and not checkcaller() then
+		-- X and Y stay real: games draw their cursors and menus from them
+		if hookState.alive and silent.active and MouseSpoof[key] and rawequal(self, mouseObject) and Settings.silentMouse
+			and not checkcaller() and shooting() then
 			if key == "Hit" then
 				return silent.hitCFrame
 			elseif key == "Target" then
 				return silent.part
-			elseif key == "UnitRay" then
-				return silent.unitRay
-			elseif key == "X" then
-				return silent.screen.X
-			elseif key == "Y" then
-				return silent.screen.Y
 			end
+			return silent.unitRay
 		end
 		return oldIndex(self, key)
 	end))
