@@ -1474,23 +1474,6 @@ slider(movementPage, "Fly speed", "flySpeed", 10, 300, 5, function(v) return str
 section(movementPage, "Other")
 switch(movementPage, "Noclip", "noclip")
 switch(movementPage, "Ctrl-click teleport", "clickTp")
-UI.inSwordForge = game.GameId == 10758912149
-if UI.inSwordForge then
-local gamesPage = page("games")
-section(gamesPage, "+1 Sword Forge")
-switch(gamesPage, "Auto train", "swordForgeTrain")
-UI.swordGain = bind(new("TextLabel", {
-AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.5, -16, 0, 18),
-BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
-TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = (row(gamesPage, "Power gained")),
-}), "TextColor3", "muted")
-note(gamesPage, "Trains at the same speed as holding the train button. It pauses on training grounds, where power comes in by itself.")
-else
-bind(new("TextLabel", {
-Size = UDim2.new(1, 0, 0, 280), BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = 18,
-Text = "Coming soon, join discord for news", TextWrapped = true, Parent = page("games"),
-}), "TextColor3", "muted")
-end
 local settingsPage = page("settings")
 section(settingsPage, "Presets")
 do
@@ -3716,7 +3699,16 @@ connect(btn.Activated, b[2])
 end
 return detail
 end
-if UI.inSwordForge then
+do
+local gamesPage = page("games")
+local function buildSwordForge(p)
+switch(p, "Auto train", "swordForgeTrain")
+local gainLabel = bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.5, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = (row(p, "Power gained")),
+}), "TextColor3", "muted")
+note(p, "Trains at the same speed as holding the train button. It pauses on training grounds, where power comes in by itself.")
 task.spawn(function()
 local ClickDelay = 0.11 -- the game's own hold-to-train speed
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared", 30)
@@ -3725,7 +3717,7 @@ local client = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client")
 return require(Shared.Net.Net), require(Shared.Net.Protocol).Msg, require(client:WaitForChild("TrainingFeedback"))
 end)
 if not loaded then
-UI.swordGain.Text = "Unavailable"
+gainLabel.Text = "Unavailable"
 return
 end
 local function canTrain()
@@ -3745,11 +3737,54 @@ last = power
 local now = os.clock()
 if now - shownAt > 0.5 then
 shownAt = now
-UI.swordGain.Text = string.format("%d", gained)
+gainLabel.Text = string.format("%d", gained)
 end
 task.wait(ClickDelay)
 end
 end)
+end
+local Games = {
+{ name = "+1 Sword Forge", gameId = 10758912149, placeId = 93239606899307, build = buildSwordForge },
+}
+local current
+for _, entry in ipairs(Games) do
+if entry.gameId == game.GameId then current = entry end
+end
+if current then
+section(gamesPage, current.name)
+current.build(gamesPage)
+end
+local RELOAD = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/envidz/vigil/main/vigil.lua"))()'
+local function join(entry)
+toast("Joining " .. entry.name)
+local queue = (typeof(queue_on_teleport) == "function" and queue_on_teleport) or (typeof(queueonteleport) == "function" and queueonteleport)
+if queue then pcall(queue, RELOAD) end
+local ok = pcall(function() TeleportService:Teleport(entry.placeId, LocalPlayer) end)
+if not ok then toast("Couldn't join " .. entry.name) end
+end
+section(gamesPage, "Supported games")
+if not current then
+note(gamesPage, "This game isn't supported yet. Join one from the list, or check the Discord for new ones.")
+end
+local search = inputRow(gamesPage, "Search", "Game name")
+local box = listBox(gamesPage)
+local function render()
+clearList(box)
+local q = string.lower(search.Text)
+local shown = 0
+for _, entry in ipairs(Games) do
+if q == "" or string.find(string.lower(entry.name), q, 1, true) then
+shown += 1
+local here = entry == current
+listRow(box, shown, entry.name, here and "You're playing this" or "Teleports you there", here and {} or {
+{ "Join", function() join(entry) end, false, true },
+})
+end
+end
+if shown == 0 then emptyLine(box, "No games match that search.") end
+end
+connect(search:GetPropertyChangedSignal("Text"), render)
+onTheme(render)
 end
 do
 local spy = UI.spy
