@@ -3714,9 +3714,8 @@ AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = 
 BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
 TextXAlignment = Enum.TextXAlignment.Right, Text = "0", Parent = (row(p, "Power gained")),
 }), "TextColor3", "muted")
-note(p, "Trains at the same speed as holding the train button. It pauses on training grounds, where power comes in by itself.")
-local canCollect = typeof(fireproximityprompt) == "function"
-if canCollect then switch(p, "Auto collect drops", "swordForgeCollect") end
+note(p, "Clicks at the game's top speed of 15 a second. It pauses on training grounds, where power comes in by itself.")
+switch(p, "Auto collect drops", "swordForgeCollect")
 local Net, Msg
 section(p, "Rewards")
 switch(p, "Auto claim rewards", "swordForgeRewards")
@@ -3742,7 +3741,7 @@ switch(p, "Auto sell materials", "swordForgeSell")
 switch(p, "Auto rebirth", "swordForgeRebirth")
 note(p, "Auto buy spends your gold, auto sell sells every material, and auto rebirth resets your progress whenever a rebirth is ready.")
 task.spawn(function()
-local ClickDelay = 0.11 -- the game's own hold-to-train speed
+local ClickDelay = 1 / 15 -- Training.ManualClickCapPerSecond
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared", 30)
 local loaded, netModule, messages, feedback = pcall(function()
 local client = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client")
@@ -3764,26 +3763,31 @@ end
 local function ask(...)
 return pcall(Net.InvokeServer, ...)
 end
-every("swordForgeCollect", 0.5, function()
+local triedAt = setmetatable({}, { __mode = "k" })
+every("swordForgeCollect", 0.08, function() -- DropPickup allows 15 a second
 local folder = workspace:FindFirstChild("DropsClient")
 local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 if not folder or not root then return end
+local reach = math.max(10, LocalPlayer:GetAttribute("MagnetRadius") or 0)
+local now, nearest, best = os.clock(), nil, reach
 for _, drop in ipairs(folder:GetChildren()) do
-local prompt = drop:FindFirstChild("PickupPrompt")
-if prompt and drop:IsA("BasePart") and (drop.Position - root.Position).Magnitude <= prompt.MaxActivationDistance then
-fireproximityprompt(prompt)
+if drop:IsA("BasePart") and now - (triedAt[drop] or 0) > 1 then
+local distance = (drop.Position - root.Position).Magnitude
+if distance <= best then nearest, best = drop, distance end
 end
+end
+if nearest then
+triedAt[nearest] = now
+Net.FireServer(Msg.DropPickup, nearest.Name)
 end
 end)
-local playtime = require(Shared.Config.Playtime)
-local onlineClaimed = {}
-every("swordForgeRewards", 30, function()
+every("swordForgeRewards", 10, function()
 ask(Msg.ClaimDailyAward)
 for tier = 1, 12 do
 if not onlineClaimed[tier] then
 local ok, result = ask(Msg.ClaimOnlineAward, tier)
 if ok and type(result) == "table" and result.ok then onlineClaimed[tier] = true end
-task.wait(0.2)
+task.wait(0.05)
 end
 end
 ask(Msg.OfflineRewardClaim)
@@ -3799,29 +3803,32 @@ end
 ask(Msg.IndexClaimLevel)
 ask(Msg.ShrineCollect)
 end)
-every("swordForgeEquip", 20, function() ask(Msg.InvEquipBest) end)
+every("swordForgeEquip", 3, function() ask(Msg.InvEquipBest) end)
 local upgrades = require(Shared.Config.Upgrades)
-every("swordForgeUpgrades", 1.5, function()
+every("swordForgeUpgrades", 1.1, function()
 for _, key in ipairs(upgrades.Order) do
 if not Settings.swordForgeUpgrades then return end
-ask(Msg.UpgradeBuy, key, false)
-task.wait(0.4)
+ask(Msg.UpgradeBuy, key, true)
 end
 end)
-every("swordForgeSell", 45, function() ask(Msg.SellMaterial, { all = true }) end)
-every("swordForgeRebirth", 10, function() ask(Msg.PlayerRebirth) end)
+every("swordForgeSell", 3, function() ask(Msg.SellMaterial, { all = true }) end)
+every("swordForgeRebirth", 2, function() ask(Msg.PlayerRebirth) end)
 local function canTrain()
 if LocalPlayer:GetAttribute("HollowFPS") or LocalPlayer:GetAttribute("IntroState") == "Playing" then return false end
 if LocalPlayer:GetAttribute("QuarryOnMyPlot") == true then return false end
 return feedback.GetGround() <= 0
 end
-local gained, last, shownAt = 0, LocalPlayer:GetAttribute("Power") or 0, 0
+local gained, last, shownAt, clickedAt = 0, LocalPlayer:GetAttribute("Power") or 0, 0, 0
 while hookState.alive do
 local power = LocalPlayer:GetAttribute("Power") or last
 if Settings.swordForgeTrain then
 if power > last then gained += power - last end
+local clock = os.clock()
+if clock - clickedAt >= ClickDelay then
+clickedAt = clock
 local ok, allowed = pcall(canTrain)
 if ok and allowed then pcall(Net.FireServer, Msg.TrainManualClick) end
+end
 end
 last = power
 local now = os.clock()
@@ -3829,7 +3836,7 @@ if now - shownAt > 0.5 then
 shownAt = now
 gainLabel.Text = string.format("%d", gained)
 end
-task.wait(ClickDelay)
+task.wait()
 end
 end)
 end
