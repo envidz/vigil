@@ -152,6 +152,12 @@ swordForgeEquip = false,
 swordForgeUpgrades = false,
 swordForgeSell = false,
 swordForgeRebirth = false,
+mtBuy = false,
+mtDiamonds = false,
+mtCollect = false,
+mtRebirth = false,
+mtRewards = false,
+mtAirdropEsp = false,
 csKillerEsp = false,
 csNpcEsp = false,
 csItemEsp = false,
@@ -3581,7 +3587,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4036,7 +4042,220 @@ task.wait(0.15)
 end
 end)
 end
+local function buildMilitaryTycoon(p)
+local Tags = game:GetService("CollectionService")
+local function character()
+return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+local function myBase()
+local bases = workspace:FindFirstChild("PlayerTycoons")
+return bases and bases:FindFirstChild(LocalPlayer.Name)
+end
+section(p, "Base")
+switch(p, "Auto buy", "mtBuy")
+switch(p, "Spend diamonds too", "mtDiamonds")
+local function readout(label, text)
+return bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+}), "TextColor3", "muted")
+end
+local nextLabel = readout("Next buy", "Nothing")
+local incomeLabel = readout("Income", "0 a second")
+local waitingLabel = readout("Uncollected", "0")
+note(p, "Hops to the cheapest button you can afford and buys everything in reach, then brings you back. Waits while you're in a vehicle or away from your base. Gamepass and optional buttons are left alone.")
+switch(p, "Auto collect cash", "mtCollect")
+switch(p, "Auto rebirth", "mtRebirth")
+note(p, "Auto rebirth resets your base as soon as you can pay for the next rebirth.")
+section(p, "Rewards")
+switch(p, "Auto claim rewards", "mtRewards")
+note(p, "Claims the daily login, AFK, free spin, base, research, mastery and free golden egg rewards when they're ready.")
+section(p, "Airdrops")
+switch(p, "Airdrop ESP", "mtAirdropEsp")
+local airdropLabel = readout("Nearest airdrop", "None")
+do
+local visuals = new("Folder", { Name = "VigilMilitaryTycoon", Parent = ROOT })
+local shown = {}
+local GOLD = Color3.fromRGB(255, 205, 90)
+task.spawn(function()
+while hookState.alive do
+local root = character()
+local nearest
+local live = {}
+for _, crate in ipairs(Tags:GetTagged("LootCrate")) do
+local hitbox = crate:IsDescendantOf(workspace) and crate:FindFirstChild("Hitbox")
+if hitbox and root then
+live[crate] = true
+local distance = (hitbox.Position - root.Position).Magnitude
+if not nearest or distance < nearest then nearest = distance end
+local gui = shown[crate]
+if not gui then
+gui = new("BillboardGui", {
+Size = UDim2.fromOffset(200, 22), StudsOffset = Vector3.new(0, 4, 0), AlwaysOnTop = true,
+LightInfluence = 0, ResetOnSpawn = false, Adornee = hitbox, Parent = visuals,
+})
+new("TextLabel", {
+Name = "Text", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, FontFace = Tokens.font,
+TextSize = 15, TextColor3 = GOLD, TextStrokeTransparency = 0.35, Parent = gui,
+})
+shown[crate] = gui
+end
+gui.Enabled = Settings.mtAirdropEsp == true
+gui.Text.Text = string.format("Airdrop  %d studs", distance)
+end
+end
+for crate, gui in pairs(shown) do
+if not live[crate] then
+gui:Destroy()
+shown[crate] = nil
+end
+end
+airdropLabel.Text = nearest and string.format("%d studs", nearest) or "None"
+local base = myBase()
+incomeLabel.Text = string.format("%d a second", LocalPlayer:GetAttribute("IncomePerSecond") or 0)
+waitingLabel.Text = string.format("%d", base and base:GetAttribute("PlayerTycoon_UncollectedCash") or 0)
+task.wait(0.25)
+end
+end)
+end
+task.spawn(function()
+local Storage = game:GetService("ReplicatedStorage")
+local loaded, Util, Data, Rebirths, Knit = pcall(function()
+local controllers = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Controllers")
+local shared = Storage:WaitForChild("Shared"):WaitForChild("Util")
+return require(shared:WaitForChild("TycoonUtil")), require(controllers:WaitForChild("DataController")),
+require(shared:WaitForChild("RebirthUtil")), require(Storage.Packages._Index["sleitnick_knit@1.5.1"].knit)
+end)
+if not loaded then
+nextLabel.Text = "Unavailable"
+return
+end
+local function every(key, seconds, job)
+task.spawn(function()
+while hookState.alive do
+if Settings[key] then pcall(job) end
+task.wait(seconds)
+end
+end)
+end
+local failedAt = {}
+local function options()
+local list = {}
+local tycoon = Util.getComponent(LocalPlayer, 10)
+if not tycoon then return list end
+local rebirth, base = Data:Get("Rebirth") or 0, Data:Get({ "Tycoons", Data:Get("BaseId") })
+local now = os.clock()
+for key, model in pairs(tycoon.ButtonModels) do
+local d = model.Parent and tycoon.ButtonData[key]
+if d and (d.Rebirth or 0) <= rebirth and not d.Gamepass and not d.Optional
+and not (d.BaseRebirth and base and d.BaseRebirth > base.Rebirth)
+and (d.Currency == "Cash" or (d.Currency == "Diamonds" and Settings.mtDiamonds))
+and now - (failedAt[key] or 0) > 2 then
+table.insert(list, { key = key, d = d, price = d.Price or 0, at = d.ButtonCFrame.Position })
+end
+end
+table.sort(list, function(a, b) return a.price < b.price end)
+return list
+end
+local BUY_RANGE, MAX_HOP, HOP_DELAY, home = 15, 400, 0.12, nil
+local function canMove(root)
+local humanoid = root.Parent:FindFirstChildOfClass("Humanoid")
+return humanoid and humanoid.Health > 0 and not humanoid.SeatPart
+end
+local function goHome()
+local root = character()
+if home and root and canMove(root) then root.CFrame = home end
+home = nil
+end
+local function buyAround(target, list, wallet)
+local base = myBase()
+local pending, bought = 0, false
+for _, option in ipairs(list) do
+local currency = option.d.Currency
+if (option.at - target).Magnitude <= BUY_RANGE and wallet[currency] >= option.price then
+wallet[currency] -= option.price
+pending += 1
+task.spawn(function()
+local called, result = pcall(function() return base.RemoteFunction:InvokeServer("BuyButton", option.key) end)
+if called and result then bought = true else failedAt[option.key] = os.clock() end
+pending -= 1
+end)
+end
+end
+local started = os.clock()
+while pending > 0 and os.clock() - started < 2 do task.wait() end
+return bought
+end
+task.spawn(function()
+while hookState.alive do
+local bought = false
+local ok, list = pcall(options)
+local first = ok and list[1]
+if first then
+nextLabel.Text = string.format("%s, %s %d", first.d.DisplayName or first.key, first.d.Currency, first.price)
+elseif ok then
+nextLabel.Text = "Nothing"
+end
+local wallet = { Cash = Data:Get("Cash") or 0, Diamonds = Data:Get("Diamonds") or 0 }
+local root = character()
+if Settings.mtBuy and first and wallet[first.d.Currency] >= first.price and root and canMove(root) then
+local distance = (first.at - root.Position).Magnitude
+if distance > MAX_HOP then
+nextLabel.Text = "Go back to your base"
+else
+if distance > BUY_RANGE then
+home = home or root.CFrame
+root.CFrame = CFrame.new(first.at + Vector3.new(0, 3, 0))
+root.AssemblyLinearVelocity = Vector3.zero
+task.wait(HOP_DELAY) -- let the server see the new position
+end
+bought = buyAround(first.at, list, wallet)
+end
+elseif home then
+goHome()
+end
+if bought then task.wait() else task.wait(0.3) end
+end
+end)
+every("mtCollect", 1, function()
+local root, base = character(), myBase()
+if not root or not base or (base:GetAttribute("PlayerTycoon_UncollectedCash") or 0) <= 0 then return end
+for _, giver in ipairs(Util.getTagged(LocalPlayer, "CashGiver")) do
+local button = giver:FindFirstChild("CollectButton")
+if button then
+firetouchinterest(root, button, 0)
+task.wait()
+firetouchinterest(root, button, 1)
+end
+end
+end)
+every("mtRebirth", 3, function()
+local base = Data:Get({ "Tycoons", Data:Get("BaseId") })
+local price = Rebirths.GetPriceForRebirth(Data:Get("Rebirth") + 1, base.Rebirth + 1, Data:Get("BaseId"), Data:Get("Flags"))
+if type(price) == "number" and (Data:Get("Cash") or 0) >= price then myBase().Rebirth:InvokeServer() end
+end)
+local daily, spinner = Knit.GetService("DailyLoginService"), Knit.GetService("SpinnerService")
+every("mtRewards", 60, function()
+pcall(daily.Claim, daily)
+pcall(daily.ClaimAFK, daily)
+spinner.RequestFreeSpin:Fire()
+for name, method in pairs({ TycoonService = "ClaimReward", ResearchService = "Claim", CardPackService = "FreeGoldenEgg" }) do
+pcall(function()
+local service = Knit.GetService(name)
+service[method](service)
+end)
+end
+local mastery = Knit.GetService("MasteryService")
+for _ = 1, 25 do
+local claimed, more = pcall(mastery.ClaimReward, mastery)
+if not claimed or not more then break end
+end
+end)
+end)
+end
 local Games = {
+{ name = "Military Tycoon", gameId = 2788648141, placeId = 7180042682, build = buildMilitaryTycoon },
 { name = "Closing Shift", gameId = 10767355485, placeId = 118297934142609, build = buildClosingShift },
 { name = "+1 Sword Forge", gameId = 10758912149, placeId = 93239606899307, build = buildSwordForge },
 }
