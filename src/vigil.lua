@@ -1980,8 +1980,10 @@ end
 -- Teams ------------------------------------------------------------------------
 -- A player or NPC counts as a teammate from, in order: a manual mark (ally key),
 -- Roblox friends (optional), a team tag the game stores in attributes or value
--- objects, then Roblox Teams / TeamColor. Lobby and free-for-all teams never
--- count, and one team that holds everyone never counts either.
+-- objects, Roblox Teams / TeamColor, then groups like squads or clans. A group can
+-- sit inside a team, so it only decides when Roblox teams don't divide the server.
+-- Lobby and free-for-all teams never count, and one team that holds everyone
+-- never counts either.
 
 -- Team names that mean "not fighting" or "everyone for themselves"
 local function teamName(player)
@@ -2003,9 +2005,13 @@ allyMarks = setmetatable({}, { __mode = "k" }) -- player or NPC model -> true (t
 -- attribute / value names games use for a team
 local TEAM_KEYS = {
 	team = true, teamname = true, teamid = true, teamindex = true, teamnumber = true, teamcolor = true,
-	teamcolour = true, side = true, squad = true, faction = true, alliance = true, allegiance = true,
-	clan = true, party = true, crew = true, army = true, nation = true,
+	teamcolour = true, side = true, allegiance = true, army = true, nation = true,
 }
+-- smaller groups: two players on the same team are often in different ones
+local GROUP_KEYS = { squad = true, party = true, crew = true, clan = true, faction = true, alliance = true }
+local ANY_KEYS = {}
+for key in pairs(TEAM_KEYS) do ANY_KEYS[key] = true end
+for key in pairs(GROUP_KEYS) do ANY_KEYS[key] = true end
 local NO_TEAM = { [""] = true, none = true, ["nil"] = true, null = true, neutral = true, unassigned = true, nobody = true }
 
 -- Turns any team value into one comparable string, or nil when it means "no team"
@@ -2029,16 +2035,17 @@ local function teamValue(v)
 	return "s:" .. s
 end
 
-local function readTag(inst)
+local function readTag(inst, keys)
 	if not inst then return end
+	keys = keys or ANY_KEYS
 	for key, v in pairs(inst:GetAttributes()) do
-		if TEAM_KEYS[string.lower(key)] then
+		if keys[string.lower(key)] then
 			local tag = teamValue(v)
 			if tag then return tag end
 		end
 	end
 	for _, child in ipairs(inst:GetChildren()) do
-		if child:IsA("ValueBase") and TEAM_KEYS[string.lower(child.Name)] then
+		if child:IsA("ValueBase") and keys[string.lower(child.Name)] then
 			local ok, v = pcall(function() return child.Value end)
 			local tag = ok and teamValue(v)
 			if tag then return tag end
@@ -2048,16 +2055,19 @@ end
 
 -- Cached for a moment: these are read for every target every frame
 local tagCache = setmetatable({}, { __mode = "k" })
-local function tagOf(player)
+local function findTag(player, keys)
+	local char = player.Character
+	return readTag(player, keys) or readTag(char, keys) or readTag(char and char:FindFirstChildOfClass("Humanoid"), keys)
+		or readTag(player:FindFirstChild("leaderstats"), keys) or readTag(player:FindFirstChild("Data"), keys)
+		or readTag(player:FindFirstChild("Stats"), keys) or false
+end
+local function tagsOf(player)
 	local now = os.clock()
 	local c = tagCache[player]
-	if c and now - c.at < 1 then return c.tag end
-	local char = player.Character
-	local tag = readTag(player) or readTag(char) or readTag(char and char:FindFirstChildOfClass("Humanoid"))
-		or readTag(player:FindFirstChild("leaderstats")) or readTag(player:FindFirstChild("Data"))
-		or readTag(player:FindFirstChild("Stats"))
-	tagCache[player] = { at = now, tag = tag or false }
-	return tag or false
+	if c and now - c.at < 1 then return c end
+	c = { at = now, tag = findTag(player, TEAM_KEYS), group = findTag(player, GROUP_KEYS) }
+	tagCache[player] = c
+	return c
 end
 
 -- Roblox teams as one key: the Team, or the TeamColor when the game uses colours only
@@ -2067,18 +2077,19 @@ local function robloxTeam(p)
 end
 
 -- Whether the players who are actually fighting are split over more than one team
-local teamCache = { at = -1, split = false, tagSplit = false }
+local teamCache = { at = -1, split = false, tagSplit = false, groupSplit = false }
 local function refreshSplit()
 	local now = os.clock()
 	if now - teamCache.at < 0.5 then return end
 	teamCache.at = now
-	teamCache.split, teamCache.tagSplit = false, false
-	local myTeam, myTag = robloxTeam(LocalPlayer), tagOf(LocalPlayer)
+	teamCache.split, teamCache.tagSplit, teamCache.groupSplit = false, false, false
+	local myTeam, me = robloxTeam(LocalPlayer), tagsOf(LocalPlayer)
 	for _, other in ipairs(Players:GetPlayers()) do
 		if other ~= LocalPlayer and not idleTeam(teamName(other)) then
 			if robloxTeam(other) ~= myTeam then teamCache.split = true end
-			local tag = tagOf(other)
-			if tag and tag ~= myTag then teamCache.tagSplit = true end
+			local tags = tagsOf(other)
+			if tags.tag and tags.tag ~= me.tag then teamCache.tagSplit = true end
+			if tags.group and tags.group ~= me.group then teamCache.groupSplit = true end
 		end
 	end
 end
@@ -2116,19 +2127,25 @@ function isTeammate(player)
 	if Settings.friendsAsTeam and isFriend(player) then return true end
 
 	-- a team the game stores itself is the most reliable signal
-	local mine, theirs = tagOf(LocalPlayer), tagOf(player)
-	if mine and theirs then
-		if mine ~= theirs then return false end
-		refreshSplit()
+	local mine, theirs = tagsOf(LocalPlayer), tagsOf(player)
+	refreshSplit()
+	if mine.tag and theirs.tag then
+		if mine.tag ~= theirs.tag then return false end
 		-- everyone carrying the same tag means it is not really a team
 		return teamCache.tagSplit or teamCache.split
 	end
 
+	-- real teams that divide the server beat any squad or clan inside them
 	local myTeam, theirTeam = robloxTeam(LocalPlayer), robloxTeam(player)
-	if myTeam == nil or theirTeam ~= myTeam then return false end
-	if ffaTeam(teamName(player)) or idleTeam(teamName(player)) then return false end
-	refreshSplit()
-	return teamCache.split
+	if teamCache.split and myTeam ~= nil and theirTeam ~= nil then
+		if theirTeam ~= myTeam then return false end
+		return not (ffaTeam(teamName(player)) or idleTeam(teamName(player)))
+	end
+
+	if mine.group and theirs.group then
+		return mine.group == theirs.group and teamCache.groupSplit
+	end
+	return false
 end
 
 -- NPCs ------------------------------------------------------------------------
@@ -2184,8 +2201,8 @@ local function npcAlly(model)
 	-- a team tag on the NPC, compared with every way our own team is written
 	local theirs = readTag(model) or readTag(model:FindFirstChildOfClass("Humanoid"))
 	if theirs then
-		local mine = tagOf(LocalPlayer)
-		if mine and theirs == mine then return true end
+		local me = tagsOf(LocalPlayer)
+		if theirs == me.tag or theirs == me.group then return true end
 		if LocalPlayer.Team then
 			return theirs == teamValue(LocalPlayer.Team) or theirs == "c:" .. LocalPlayer.TeamColor.Name
 				or theirs == "i:" .. LocalPlayer.Team:GetFullName()

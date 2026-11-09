@@ -1750,9 +1750,12 @@ do
 allyMarks = setmetatable({}, { __mode = "k" }) -- player or NPC model -> true (teammate) / false (enemy)
 local TEAM_KEYS = {
 team = true, teamname = true, teamid = true, teamindex = true, teamnumber = true, teamcolor = true,
-teamcolour = true, side = true, squad = true, faction = true, alliance = true, allegiance = true,
-clan = true, party = true, crew = true, army = true, nation = true,
+teamcolour = true, side = true, allegiance = true, army = true, nation = true,
 }
+local GROUP_KEYS = { squad = true, party = true, crew = true, clan = true, faction = true, alliance = true }
+local ANY_KEYS = {}
+for key in pairs(TEAM_KEYS) do ANY_KEYS[key] = true end
+for key in pairs(GROUP_KEYS) do ANY_KEYS[key] = true end
 local NO_TEAM = { [""] = true, none = true, ["nil"] = true, null = true, neutral = true, unassigned = true, nobody = true }
 local function teamValue(v)
 local t = typeof(v)
@@ -1773,16 +1776,17 @@ local s = string.lower(v):gsub("%s+", "")
 if NO_TEAM[s] then return end
 return "s:" .. s
 end
-local function readTag(inst)
+local function readTag(inst, keys)
 if not inst then return end
+keys = keys or ANY_KEYS
 for key, v in pairs(inst:GetAttributes()) do
-if TEAM_KEYS[string.lower(key)] then
+if keys[string.lower(key)] then
 local tag = teamValue(v)
 if tag then return tag end
 end
 end
 for _, child in ipairs(inst:GetChildren()) do
-if child:IsA("ValueBase") and TEAM_KEYS[string.lower(child.Name)] then
+if child:IsA("ValueBase") and keys[string.lower(child.Name)] then
 local ok, v = pcall(function() return child.Value end)
 local tag = ok and teamValue(v)
 if tag then return tag end
@@ -1790,33 +1794,37 @@ end
 end
 end
 local tagCache = setmetatable({}, { __mode = "k" })
-local function tagOf(player)
+local function findTag(player, keys)
+local char = player.Character
+return readTag(player, keys) or readTag(char, keys) or readTag(char and char:FindFirstChildOfClass("Humanoid"), keys)
+or readTag(player:FindFirstChild("leaderstats"), keys) or readTag(player:FindFirstChild("Data"), keys)
+or readTag(player:FindFirstChild("Stats"), keys) or false
+end
+local function tagsOf(player)
 local now = os.clock()
 local c = tagCache[player]
-if c and now - c.at < 1 then return c.tag end
-local char = player.Character
-local tag = readTag(player) or readTag(char) or readTag(char and char:FindFirstChildOfClass("Humanoid"))
-or readTag(player:FindFirstChild("leaderstats")) or readTag(player:FindFirstChild("Data"))
-or readTag(player:FindFirstChild("Stats"))
-tagCache[player] = { at = now, tag = tag or false }
-return tag or false
+if c and now - c.at < 1 then return c end
+c = { at = now, tag = findTag(player, TEAM_KEYS), group = findTag(player, GROUP_KEYS) }
+tagCache[player] = c
+return c
 end
 local function robloxTeam(p)
 if p.Team then return p.Team end
 if not p.Neutral then return p.TeamColor end
 end
-local teamCache = { at = -1, split = false, tagSplit = false }
+local teamCache = { at = -1, split = false, tagSplit = false, groupSplit = false }
 local function refreshSplit()
 local now = os.clock()
 if now - teamCache.at < 0.5 then return end
 teamCache.at = now
-teamCache.split, teamCache.tagSplit = false, false
-local myTeam, myTag = robloxTeam(LocalPlayer), tagOf(LocalPlayer)
+teamCache.split, teamCache.tagSplit, teamCache.groupSplit = false, false, false
+local myTeam, me = robloxTeam(LocalPlayer), tagsOf(LocalPlayer)
 for _, other in ipairs(Players:GetPlayers()) do
 if other ~= LocalPlayer and not idleTeam(teamName(other)) then
 if robloxTeam(other) ~= myTeam then teamCache.split = true end
-local tag = tagOf(other)
-if tag and tag ~= myTag then teamCache.tagSplit = true end
+local tags = tagsOf(other)
+if tags.tag and tags.tag ~= me.tag then teamCache.tagSplit = true end
+if tags.group and tags.group ~= me.group then teamCache.groupSplit = true end
 end
 end
 end
@@ -1848,17 +1856,21 @@ if player == LocalPlayer then return true end
 local mark = allyMarks[player]
 if mark ~= nil then return mark end
 if Settings.friendsAsTeam and isFriend(player) then return true end
-local mine, theirs = tagOf(LocalPlayer), tagOf(player)
-if mine and theirs then
-if mine ~= theirs then return false end
+local mine, theirs = tagsOf(LocalPlayer), tagsOf(player)
 refreshSplit()
+if mine.tag and theirs.tag then
+if mine.tag ~= theirs.tag then return false end
 return teamCache.tagSplit or teamCache.split
 end
 local myTeam, theirTeam = robloxTeam(LocalPlayer), robloxTeam(player)
-if myTeam == nil or theirTeam ~= myTeam then return false end
-if ffaTeam(teamName(player)) or idleTeam(teamName(player)) then return false end
-refreshSplit()
-return teamCache.split
+if teamCache.split and myTeam ~= nil and theirTeam ~= nil then
+if theirTeam ~= myTeam then return false end
+return not (ffaTeam(teamName(player)) or idleTeam(teamName(player)))
+end
+if mine.group and theirs.group then
+return mine.group == theirs.group and teamCache.groupSplit
+end
+return false
 end
 local OWNER_KEYS = {
 owner = true, ownerid = true, ownername = true, creator = true, creatorid = true, summoner = true,
@@ -1905,8 +1917,8 @@ local owner = ownerOf(model)
 if owner then return isTeammate(owner) end
 local theirs = readTag(model) or readTag(model:FindFirstChildOfClass("Humanoid"))
 if theirs then
-local mine = tagOf(LocalPlayer)
-if mine and theirs == mine then return true end
+local me = tagsOf(LocalPlayer)
+if theirs == me.tag or theirs == me.group then return true end
 if LocalPlayer.Team then
 return theirs == teamValue(LocalPlayer.Team) or theirs == "c:" .. LocalPlayer.TeamColor.Name
 or theirs == "i:" .. LocalPlayer.Team:GetFullName()
