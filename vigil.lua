@@ -82,8 +82,9 @@ labelMuted = Color3.fromRGB(200, 200, 205),
 healthLow = Color3.fromRGB(235, 70, 70),
 healthHigh = Color3.fromRGB(80, 220, 120),
 }
-local SAVE_FILE = "Vigil.json"
-local GAME_FILE = "Vigil-" .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId) .. ".json" -- used when "per game" is on
+local GAMES_ONLY = false
+local SAVE_FILE = GAMES_ONLY and "VigilGames.json" or "Vigil.json"
+local GAME_FILE = (GAMES_ONLY and "VigilGames-" or "Vigil-") .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId) .. ".json" -- used when "per game" is on
 local Settings = {
 enabled = true,
 boxes = true,
@@ -231,6 +232,15 @@ end
 if not Themes[Settings.theme] then Settings.theme = "Dark" end
 if not Accents[Settings.accentColour] then Settings.accentColour = 1 end
 if not EspColours[Settings.espColour] then Settings.espColour = 1 end
+end
+if GAMES_ONLY then
+for _, key in ipairs({
+"enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "spin", "hitmarker", "fullbright", "noFog",
+"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly", "noclip",
+"clickTp", "spyRecord", "antiAfk", "showModules", "perGame",
+}) do
+Settings[key] = false
+end
 end
 local saveQueued = false
 local function save()
@@ -979,12 +989,13 @@ local tabs = {
 }
 local tabById = {}
 for _, tab in ipairs(tabs) do tabById[tab.id] = tab end
-local GROUPS = {
+local GROUPS = GAMES_ONLY and { { "Games", { "games" } } } or {
 { "Combat", { "aim", "trigger" } },
 { "Sight", { "esp", "visuals" } },
 { "World", { "movement", "players", "games" } },
 { "Tools", { "spy" } },
 }
+local NAV_TOP = GAMES_ONLY and 58 or 100 -- no search field in the games build
 local masterHost = new("Frame", {
 Size = UDim2.fromOffset(120, 34), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -32, 0, 40),
 BackgroundTransparency = 1, Visible = false, Parent = UI.main,
@@ -1037,7 +1048,7 @@ if tab.master then switchRenders[tab.master] = function() renderMaster(true) end
 end
 onTheme(function() renderMaster(false) end)
 local navScroll = new("ScrollingFrame", {
-Position = UDim2.fromOffset(0, 100), Size = UDim2.new(1, -1, 1, -168), BackgroundTransparency = 1, BorderSizePixel = 0,
+Position = UDim2.fromOffset(0, NAV_TOP), Size = UDim2.new(1, -1, 1, -68 - NAV_TOP), BackgroundTransparency = 1, BorderSizePixel = 0,
 ScrollBarThickness = 3, ScrollBarImageTransparency = 0.55, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(), Parent = UI.side,
 })
 bind(navScroll, "ScrollBarImageColor3", "text")
@@ -1089,7 +1100,7 @@ navY += 35
 end
 navY += 12
 end
-navItem("settings", 0)
+if not GAMES_ONLY then navItem("settings", 0) end
 local discordBtn = new("TextButton", {
 Size = UDim2.new(1, -20, 0, 34), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, ZIndex = 2, Parent = navScroll,
 }, { round(10) })
@@ -1127,13 +1138,15 @@ end)
 end)
 end
 function UI.layoutNav()
-local view = Holder.Size.Y.Offset - 168
-local top = math.max(navY, view - 72)
+local view = Holder.Size.Y.Offset - 68 - NAV_TOP
+local top = math.max(navY, view - (nav.settings and 72 or 37))
 discordBtn.Position = UDim2.fromOffset(10, top)
+if nav.settings then
 nav.settings.y = top + 35
 nav.settings.btn.Position = UDim2.fromOffset(10, top + 35)
-navScroll.CanvasSize = UDim2.fromOffset(0, math.max(view, top + 72))
 if UI.currentTab == "settings" then navPill.Position = UDim2.fromOffset(10, nav.settings.y) end
+end
+navScroll.CanvasSize = UDim2.fromOffset(0, math.max(view, top + 72))
 end
 function selectTab(id)
 local first = UI.currentTab == nil
@@ -1165,6 +1178,7 @@ bind(field, "BackgroundColor3", "raised")
 local image, paint = iconImage("search", 18, field)
 image.Position = UDim2.fromOffset(8, 8)
 onTheme(function() paint(P.muted) end)
+field.Visible = not GAMES_ONLY
 searchBox = new("TextBox", {
 Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(34, 0), BackgroundTransparency = 1, Text = "",
 PlaceholderText = "Search settings", FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1,
@@ -1189,7 +1203,7 @@ if q == "fov" then q = "field of view" end
 if q == "" then
 if UI.currentTab == "search" then
 UI.currentTab = nil
-selectTab(lastTab or "aim")
+selectTab(lastTab or (GAMES_ONLY and "games" or "aim"))
 end
 return
 end
@@ -2745,7 +2759,7 @@ return bestPlayer, bestPart
 end
 connect(UserInputService.InputBegan, function(input)
 if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
-if inputName(input) ~= Settings.allyKey then return end
+if GAMES_ONLY or inputName(input) ~= Settings.allyKey then return end
 local camera = workspace.CurrentCamera
 if not camera then return end
 local mouse = UserInputService:GetMouseLocation()
@@ -3428,6 +3442,7 @@ end)
 connect(UserInputService.InputBegan, function(input, gameProcessed)
 if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
 local name = inputName(input)
+if GAMES_ONLY then return end
 if name == Settings.flyKey then
 Settings.fly = not Settings.fly
 save()
@@ -5117,7 +5132,7 @@ if camera and hum and camera.CameraSubject ~= hum and not features.freecam then 
 end)
 connect(UserInputService.InputBegan, function(input)
 if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
-if inputName(input) == Settings.freecamKey then setFreecam(not features.freecam) end
+if not GAMES_ONLY and inputName(input) == Settings.freecamKey then setFreecam(not features.freecam) end
 end)
 local playersPage = page("players")
 section(playersPage, "Server")
@@ -5780,7 +5795,7 @@ highlightFolder:Destroy()
 if ENV.Vigil and ENV.Vigil.Unload == unload then ENV.Vigil = nil end
 end
 ENV.Vigil = { Unload = unload, Settings = Settings }
-selectTab("aim")
+selectTab(GAMES_ONLY and "games" or "aim")
 applyTheme()
 if Settings.showLoader then
 Holder.Visible = false

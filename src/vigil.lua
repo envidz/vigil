@@ -104,8 +104,10 @@ local World = { -- colours drawn over the game world, theme-independent
 -- Settings (persisted when the executor supports file access)
 --------------------------------------------------------------------------------
 
-local SAVE_FILE = "Vigil.json"
-local GAME_FILE = "Vigil-" .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId) .. ".json" -- used when "per game" is on
+-- build.mjs flips this to true for vigil-games.lua: only the Games tab, nothing else runs
+local GAMES_ONLY = false
+local SAVE_FILE = GAMES_ONLY and "VigilGames.json" or "Vigil.json"
+local GAME_FILE = (GAMES_ONLY and "VigilGames-" or "Vigil-") .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId) .. ".json" -- used when "per game" is on
 
 local Settings = {
 	enabled = true,
@@ -256,6 +258,15 @@ if canSave then
 	if not Themes[Settings.theme] then Settings.theme = "Dark" end
 	if not Accents[Settings.accentColour] then Settings.accentColour = 1 end
 	if not EspColours[Settings.espColour] then Settings.espColour = 1 end
+end
+if GAMES_ONLY then
+	for _, key in ipairs({
+		"enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "spin", "hitmarker", "fullbright", "noFog",
+		"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly", "noclip",
+		"clickTp", "spyRecord", "antiAfk", "showModules", "perGame",
+	}) do
+		Settings[key] = false
+	end
 end
 
 local saveQueued = false
@@ -1125,12 +1136,13 @@ local tabs = {
 }
 local tabById = {}
 for _, tab in ipairs(tabs) do tabById[tab.id] = tab end
-local GROUPS = {
+local GROUPS = GAMES_ONLY and { { "Games", { "games" } } } or {
 	{ "Combat", { "aim", "trigger" } },
 	{ "Sight", { "esp", "visuals" } },
 	{ "World", { "movement", "players", "games" } },
 	{ "Tools", { "spy" } },
 }
+local NAV_TOP = GAMES_ONLY and 58 or 100 -- no search field in the games build
 
 -- the big switch beside the page title, shared by every page that has one
 local masterHost = new("Frame", {
@@ -1188,7 +1200,7 @@ onTheme(function() renderMaster(false) end)
 
 -- navigation: one highlight that slides between items
 local navScroll = new("ScrollingFrame", {
-	Position = UDim2.fromOffset(0, 100), Size = UDim2.new(1, -1, 1, -168), BackgroundTransparency = 1, BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, NAV_TOP), Size = UDim2.new(1, -1, 1, -68 - NAV_TOP), BackgroundTransparency = 1, BorderSizePixel = 0,
 	ScrollBarThickness = 3, ScrollBarImageTransparency = 0.55, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(), Parent = UI.side,
 })
 bind(navScroll, "ScrollBarImageColor3", "text")
@@ -1243,7 +1255,7 @@ for _, group in ipairs(GROUPS) do
 	end
 	navY += 12
 end
-navItem("settings", 0)
+if not GAMES_ONLY then navItem("settings", 0) end
 
 -- Discord: Roblox can't open links, so the button copies the invite
 local discordBtn = new("TextButton", {
@@ -1284,13 +1296,15 @@ do
 end
 
 function UI.layoutNav()
-	local view = Holder.Size.Y.Offset - 168
-	local top = math.max(navY, view - 72)
+	local view = Holder.Size.Y.Offset - 68 - NAV_TOP
+	local top = math.max(navY, view - (nav.settings and 72 or 37))
 	discordBtn.Position = UDim2.fromOffset(10, top)
-	nav.settings.y = top + 35
-	nav.settings.btn.Position = UDim2.fromOffset(10, top + 35)
+	if nav.settings then
+		nav.settings.y = top + 35
+		nav.settings.btn.Position = UDim2.fromOffset(10, top + 35)
+		if UI.currentTab == "settings" then navPill.Position = UDim2.fromOffset(10, nav.settings.y) end
+	end
 	navScroll.CanvasSize = UDim2.fromOffset(0, math.max(view, top + 72))
-	if UI.currentTab == "settings" then navPill.Position = UDim2.fromOffset(10, nav.settings.y) end
 end
 
 function selectTab(id)
@@ -1325,6 +1339,7 @@ do
 	local image, paint = iconImage("search", 18, field)
 	image.Position = UDim2.fromOffset(8, 8)
 	onTheme(function() paint(P.muted) end)
+	field.Visible = not GAMES_ONLY
 	searchBox = new("TextBox", {
 		Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(34, 0), BackgroundTransparency = 1, Text = "",
 		PlaceholderText = "Search settings", FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1,
@@ -1352,7 +1367,7 @@ do
 		if q == "" then
 			if UI.currentTab == "search" then
 				UI.currentTab = nil
-				selectTab(lastTab or "aim")
+				selectTab(lastTab or (GAMES_ONLY and "games" or "aim"))
 			end
 			return
 		end
@@ -3155,7 +3170,7 @@ end
 -- Mark teammate key: teammate -> enemy -> automatic, for whoever is nearest the cursor
 connect(UserInputService.InputBegan, function(input)
 	if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
-	if inputName(input) ~= Settings.allyKey then return end
+	if GAMES_ONLY or inputName(input) ~= Settings.allyKey then return end
 	local camera = workspace.CurrentCamera
 	if not camera then return end
 	local mouse = UserInputService:GetMouseLocation()
@@ -3954,6 +3969,7 @@ end)
 connect(UserInputService.InputBegan, function(input, gameProcessed)
 	if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
 	local name = inputName(input)
+	if GAMES_ONLY then return end
 	if name == Settings.flyKey then
 		Settings.fly = not Settings.fly
 		save()
@@ -5836,7 +5852,7 @@ end)
 
 connect(UserInputService.InputBegan, function(input)
 	if keyCapture or input == consumedInput or UserInputService:GetFocusedTextBox() then return end
-	if inputName(input) == Settings.freecamKey then setFreecam(not features.freecam) end
+	if not GAMES_ONLY and inputName(input) == Settings.freecamKey then setFreecam(not features.freecam) end
 end)
 
 -- Players page ---------------------------------------------------------------------
@@ -6575,7 +6591,7 @@ end
 
 ENV.Vigil = { Unload = unload, Settings = Settings }
 
-selectTab("aim")
+selectTab(GAMES_ONLY and "games" or "aim")
 applyTheme()
 if Settings.showLoader then
 	Holder.Visible = false
