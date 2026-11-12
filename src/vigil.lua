@@ -5323,7 +5323,7 @@ local function buildCastAMagnet(p)
 	section(p, "Fishing")
 	switch(p, "Auto fish", "camFish")
 	local fishLabel = readout("Status", "Off")
-	note(p, "Stand in a fishing spot. Casts with a perfect 0.8 second hold for the 3x luck bonus, then reels the catch in, over and over.")
+	note(p, "Takes you to your plot's fishing spot, casts with a perfect 0.8 second hold for the 3x luck bonus, then reels the catch in, over and over.")
 
 	section(p, "Money")
 	switch(p, "Auto sell", "camSell")
@@ -5450,6 +5450,18 @@ local function buildCastAMagnet(p)
 		return true
 	end
 
+	-- your own plot's fishing spot
+	local function goFish()
+		local plots = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Plots")
+		local plot = plots and plots:FindFirstChild("Plot" .. tostring(LocalPlayer:GetAttribute("PlotIndex")))
+		local zone, body = plot and plot:FindFirstChild("FishingZone"), root()
+		if not zone or not body then return false end
+		body.CFrame = zone.CFrame + Vector3.new(0, 3, 0)
+		body.AssemblyLinearVelocity = Vector3.zero
+		task.wait(0.4) -- the game re-checks the zone every frame
+		return true
+	end
+
 	local fishReady = canCast and startCharge and release and tap
 	task.spawn(function()
 		while hookState.alive do
@@ -5461,12 +5473,15 @@ local function buildCastAMagnet(p)
 			if Settings.camFish and fishReady then
 				state = Fishing:GetState()
 				if state == "Idle" then
-					if pcall(canCast) and canCast() then
+					if not Fishing:IsInZone() then
+						fishLabel.Text = "Going to your fishing spot"
+						if not goFish() then task.wait(1) end
+					elseif pcall(canCast) and canCast() then
 						pcall(startCharge)
 						task.wait(0.8) -- inside the perfect window
 						if Fishing:GetState() == "Charging" then pcall(release) end
 					else
-						fishLabel.Text = "Stand in a fishing spot"
+						fishLabel.Text = "Waiting to cast"
 					end
 				elseif state == "Reeling" then
 					pcall(tap) -- the game limits its own tap rate
