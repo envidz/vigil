@@ -157,6 +157,9 @@ mtDiamonds = false,
 mtCollect = false,
 mtRebirth = false,
 mtRewards = false,
+dgParry = false,
+dgParryLead = 65,
+dgParryTune = false,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -3612,7 +3615,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -4469,7 +4472,162 @@ task.wait(0.2)
 end
 end)
 end
+local function buildDuelingGrounds(p)
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+section(p, "Combat")
+switch(p, "Auto parry", "dgParry")
+slider(p, "Parry early by", "dgParryLead", 20, 150, 5, function(v) return string.format("%d ms", v) end)
+switch(p, "Auto adjust timing", "dgParryTune")
+local function readout(label, text)
+return bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+}), "TextColor3", "muted")
+end
+local resultLabel = readout("This session", "No hits yet")
+note(p, "Taps block just before an enemy swing lands, using each weapon's own attack timings. Needs your weapon out, and leaves a block you're holding alone. Critical strikes are grabs and can't be parried. Raise the timing if hits get through, lower it if you only block.")
+local loaded, Characters, Combat = pcall(function()
+local manager = require(Storage:WaitForChild("GameManager", 15))
+return manager:GetController("CharacterController"), manager:GetController("CombatController")
+end)
+if not loaded or not Characters then
+resultLabel.Text = "Unavailable"
+return
+end
+local attacks = {}
+do
+local weapons = Storage:FindFirstChild("WeaponModulesShared")
+for _, module in ipairs(weapons and weapons:GetDescendants() or {}) do
+if module:IsA("ModuleScript") and module.Parent and (module.Parent.Name == "BasicAttackTypes" or module:FindFirstAncestor("Cosmetics")) then
+local ok, data = pcall(require, module)
+if ok and type(data) == "table" and typeof(data.animation) == "Instance" and data.animation:IsA("Animation") and type(data.impacts) == "table" then
+local times, reach = {}, 0
+for _, impact in ipairs(data.impacts) do
+if type(impact) == "table" and type(impact.markerTime) == "number" then
+table.insert(times, impact.markerTime)
+local info = impact.impactInfo
+if type(info) == "table" and typeof(info.hitboxCFrame) == "CFrame" and typeof(info.hitboxSize) == "Vector3" then
+reach = math.max(reach, info.hitboxCFrame.Position.Magnitude + info.hitboxSize.Magnitude / 2)
+end
+end
+end
+if #times > 0 then
+table.sort(times)
+attacks[data.animation.AnimationId] = { times = times, reach = (reach > 0 and reach or 12) + 4 }
+end
+end
+end
+end
+end
+local function mine()
+local ok, handler = pcall(Characters.GetLocalCharacterHandler, Characters)
+return ok and handler or nil
+end
+local function rootOf(handler)
+return handler.Root or (handler.Model and handler.Model.PrimaryPart) or handler.OriginalRoot
+end
+local tune, lastPress = 0, -math.huge
+local function tapBlock(holdFor)
+local handler = mine()
+local queue = handler and handler._blockInputQueue
+if not queue or #queue >= 2 then return end
+if handler.GetIgnoreInput and handler:GetIgnoreInput() then return end
+local actions = handler.ActionManager
+if actions and actions.BlockAction and not actions.BlockAction._wantsToRelease then return end
+local entry = { state = true }
+table.insert(queue, entry)
+lastPress = os.clock()
+task.delay(holdFor, function()
+local index = table.find(queue, entry)
+if index then
+if entry.clearedByAction then
+table.remove(queue, index)
+elseif entry.state == true then
+entry.state = 0.13333333333333333
+end
+end
+local block = actions and actions.BlockAction
+if block then block._wantsToRelease = true end
+end)
+end
+local watched = setmetatable({}, { __mode = "k" })
+local live = setmetatable({}, { __mode = "k" }) -- track -> { info, handler, done }
+local function watch(handler)
+local animator = handler.Animator
+if not animator or watched[animator] then return end
+watched[animator] = true
+local function add(track)
+local info = track.Animation and attacks[track.Animation.AnimationId]
+if info then live[track] = { info = info, handler = handler, done = {} } end
+end
+connect(animator.AnimationPlayed, add)
+for _, track in ipairs(animator:GetPlayingAnimationTracks()) do add(track) end
+end
+task.spawn(function()
+while hookState.alive do
+if Settings.dgParry then
+pcall(function()
+local me = mine()
+for _, model in ipairs(workspace:GetChildren()) do
+if model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
+local ok, handler = pcall(Characters.GetCharacterHandler, Characters, model)
+if ok and handler and handler ~= me and not handler.IsLocalPlayer then watch(handler) end
+end
+end
+end)
+end
+task.wait(1)
+end
+end)
+connect(RunService.Heartbeat, function()
+if not Settings.dgParry then return end
+local me = mine()
+local myRoot = me and rootOf(me)
+if not myRoot then return end
+local lead = math.clamp((Settings.dgParryLead + tune) / 1000, 0.01, 0.2)
+for track, entry in pairs(live) do
+if not track.IsPlaying then
+live[track] = nil
+elseif track.Speed > 0 then
+local position = track.TimePosition
+for index, impactAt in ipairs(entry.info.times) do
+if not entry.done[index] then
+local remaining = (impactAt - position) / track.Speed
+if remaining < -0.05 then
+entry.done[index] = true
+elseif remaining <= lead then
+entry.done[index] = true
+local theirRoot = rootOf(entry.handler)
+if theirRoot and (theirRoot.Position - myRoot.Position).Magnitude <= entry.info.reach then
+tapBlock(math.max(0.05, remaining + 0.08))
+end
+end
+end
+end
+end
+end
+end)
+local counts = { Parry = 0, Block = 0, GetHit = 0 }
+if Combat and Combat.LocalImpactResolved then
+connect(Combat.LocalImpactResolved, function(_, result)
+if counts[result] == nil then return end
+counts[result] += 1
+if Settings.dgParryTune and Settings.dgParry and os.clock() - lastPress < 0.6 then
+if result == "Block" then
+tune = math.max(tune - 5, -60)
+elseif result == "GetHit" then
+tune = math.min(tune + 5, 60)
+end
+end
+resultLabel.Text = string.format("%d parried, %d blocked, %d hit%s", counts.Parry, counts.Block, counts.GetHit,
+tune ~= 0 and string.format(", timing %+d ms", tune) or "")
+end)
+end
+end
 local Games = {
+{ name = "Dueling Grounds", gameId = 9051406594, placeId = 94217045453265, build = buildDuelingGrounds },
 { name = "Build a PC", gameId = 10592694097, placeId = 133040801603256, build = buildBuildAPC },
 { name = "Military Tycoon", gameId = 2788648141, placeId = 7180042682, build = buildMilitaryTycoon },
 { name = "Closing Shift", gameId = 10767355485, placeId = 118297934142609, build = buildClosingShift },
