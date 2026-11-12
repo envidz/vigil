@@ -172,6 +172,19 @@ agAvoid = true,
 agChase = false,
 agSplit = false,
 agRespawn = false,
+wsFarm = false,
+wsWalk = false,
+wsNpcEsp = false,
+wsRespawn = false,
+wsBuyGear = false,
+wsEra = false,
+wsTravel = false,
+wsRebirth = false,
+wsLegends = false,
+wsTarget = "Nearest",
+wsRange = 150,
+wsHead = true,
+wsEquip = true,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -3641,7 +3654,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5019,7 +5032,436 @@ end
 release()
 end)
 end
+local function buildWarSimulator(p)
+local RunService = game:GetService("RunService")
+local Storage = game:GetService("ReplicatedStorage")
+local Remotes = Storage:WaitForChild("Remotes", 15)
+local function readout(label, text)
+return bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+}), "TextColor3", "muted")
+end
+local function every(key, seconds, job)
+task.spawn(function()
+while hookState.alive do
+if Settings[key] then pcall(job) end
+task.wait(seconds)
+end
+end)
+end
+local function short(n)
+n = tonumber(n) or 0
+for _, step in ipairs({ { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }) do
+if n >= step[1] then return string.format("%.2f%s", n / step[1], step[2]) end
+end
+return tostring(math.floor(n))
+end
+section(p, "Auto farm")
+switch(p, "Auto farm", "wsFarm")
+switch(p, "Walk to targets", "wsWalk")
+switch(p, "Equip your gun", "wsEquip")
+segmented(p, "Target", "wsTarget", { "Nearest", "Richest", "Weakest" })
+slider(p, "Range", "wsRange", 40, 400, 10, function(v) return string.format("%d studs", v) end)
+switch(p, "Aim for the head", "wsHead")
+local farmLabel = readout("Status", "Off")
+local earnLabel = readout("Earned", "$0, 0 kills")
+note(p, "Aims at enemies of your current era and fires through your gun's own trigger, so fire rate, reloads and spread stay exactly as the game made them. Walk to targets moves you with normal walking, never faster. It switches target when shots stop landing.")
+section(p, "ESP")
+switch(p, "Enemy ESP", "wsNpcEsp")
+note(p, "Outlines enemies of your era with their name, distance and kill reward.")
+section(p, "Shop")
+switch(p, "Auto buy gear", "wsBuyGear")
+switch(p, "Auto unlock eras", "wsEra")
+switch(p, "Travel to newest era", "wsTravel")
+switch(p, "Auto rebirth", "wsRebirth")
+switch(p, "Auto buy legends", "wsLegends")
+local shopLabel = readout("Last bought", "Nothing yet")
+note(p, "Auto buy gear works through guns, melee, armor and explosives in the shop's order, buying the next one once you can afford it. Unlocking an era doesn't move you; Travel to newest era does. Rebirth resets your money for a bigger multiplier.")
+section(p, "Player")
+switch(p, "Auto respawn", "wsRespawn")
+note(p, "Presses the death screen's Respawn for you.")
+if not Remotes then
+farmLabel.Text = "Unavailable"
+return
+end
+local loaded, Shop, Ordered = pcall(function() return require(Storage.Modules.Shared.ShopData)() end)
+if not loaded then Shop, Ordered = nil, nil end
+local Framework, lookedAt = nil, 0
+local function framework()
+if Framework or os.clock() - lookedAt < 5 or type(getgc) ~= "function" then return Framework end
+lookedAt = os.clock()
+for _, v in ipairs(getgc(true)) do
+if type(v) == "table" and type(rawget(v, "getUIModules")) == "function" and type(rawget(v, "purchases")) == "table" then
+Framework = v
+break
+end
+end
+return Framework
+end
+local function character()
+local char = LocalPlayer.Character
+local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+local body = char and char:FindFirstChild("HumanoidRootPart")
+if not humanoid or not body or humanoid.Health <= 0 then return end
+return char, humanoid, body
+end
+local gunTool, gun, aimCache, gunSearched = nil, nil, nil, 0
+local function currentGun(tool)
+if tool == gunTool and gun then return gun end
+if tool ~= gunTool then gunTool, gun, aimCache, gunSearched = tool, nil, nil, 0 end
+if os.clock() - gunSearched < 2 or type(getgc) ~= "function" then return end
+gunSearched = os.clock()
+for _, v in ipairs(getgc(true)) do
+if type(v) == "table" and type(rawget(v, "shoot")) == "function" and type(rawget(v, "getMousePos")) == "function" then
+for _, up in pairs(debug.getupvalues(v.shoot)) do
+if up == tool then
+gun = v
+local cache = debug.getupvalues(v.getMousePos)[1]
+aimCache = type(cache) == "table" and cache or nil
+return gun
+end
+end
+end
+end
+end
+local earned, kills, lastHitOn, deadAt = 0, 0, {}, {}
+connect(Remotes.Damage.OnClientEvent, function(npc, _, money)
+earned += tonumber(money) or 0
+if typeof(npc) == "Instance" then lastHitOn[npc] = os.clock() end
+end)
+connect(Remotes.Kill.OnClientEvent, function(npc)
+kills += 1
+if typeof(npc) == "Instance" then deadAt[npc] = os.clock() end
+end)
+local skipUntil = {}
+local function usable(npc)
+local hrp = npc:FindFirstChild("HumanoidRootPart")
+if not hrp then return end
+if npc:GetAttribute("stage") ~= LocalPlayer:GetAttribute("stage") then return end
+if (deadAt[npc] and os.clock() - deadAt[npc] < 5) or (skipUntil[npc] and os.clock() < skipUntil[npc]) then return end
+if (npc:GetAttribute("health") or 1) <= 0 then return end
+return hrp
+end
+local function pickTarget(body)
+local folder = workspace:FindFirstChild("Npcs")
+if not folder then return end
+local reach = Settings.wsWalk and math.huge or Settings.wsRange
+local best, bestScore
+for _, npc in ipairs(folder:GetChildren()) do
+local hrp = usable(npc)
+if hrp then
+local d = (hrp.Position - body.Position).Magnitude
+if d <= reach then
+local score
+if Settings.wsTarget == "Richest" then
+score = (npc:GetAttribute("award") or 0) / (1 + d / 100)
+elseif Settings.wsTarget == "Weakest" then
+score = -(npc:GetAttribute("health") or 0) - d
+else
+score = -d
+end
+if not bestScore or score > bestScore then best, bestScore = npc, score end
+end
+end
+end
+return best
+end
+local target, aimPart, engagedAt = nil, nil, 0
+local AIM_STEP = "VigilWarSimAim"
+local aiming = false
+local function stopAim()
+if aiming then
+pcall(RunService.UnbindFromRenderStep, RunService, AIM_STEP)
+aiming = false
+end
+if aimCache then aimCache[1] = 0 end
+end
+local function startAim()
+if aiming then return end
+aiming = true
+RunService:BindToRenderStep(AIM_STEP, Enum.RenderPriority.Camera.Value + 2, function()
+if not hookState.alive or not Settings.wsFarm then return stopAim() end
+if aimPart and aimPart.Parent then
+local camera = workspace.CurrentCamera
+camera.CFrame = CFrame.lookAt(camera.CFrame.Position, aimPart.Position)
+if aimCache then
+aimCache[1] = os.clock() + 0.05
+aimCache[2] = { aimPart.Position, aimPart }
+end
+end
+end)
+end
+local walking = false
+local function stopWalking(humanoid, body)
+if walking and humanoid and body then humanoid:MoveTo(body.Position) end
+walking = false
+end
+local function farmTick()
+local char, humanoid, body = character()
+if not char then
+target, aimPart = nil, nil
+farmLabel.Text = "Waiting to respawn"
+return
+end
+local tool = char:FindFirstChildOfClass("Tool")
+if Settings.wsEquip then
+local fw = framework()
+local want = fw and fw.loadout and fw.loadout.ranged
+if want and (not tool or tool.Name ~= want) then
+local backpackTool = LocalPlayer.Backpack:FindFirstChild(want)
+if backpackTool then
+humanoid:EquipTool(backpackTool)
+task.wait(0.3)
+tool = char:FindFirstChildOfClass("Tool")
+end
+end
+end
+local controller = tool and currentGun(tool)
+if not controller then
+farmLabel.Text = tool and "Hold a gun (not a knife or grenade)" or "Equip a gun"
+return
+end
+if target and (not usable(target) or (os.clock() - engagedAt > 4 and os.clock() - (lastHitOn[target] or 0) > 4)) then
+if usable(target) then skipUntil[target] = os.clock() + 12 end -- shots weren't landing
+target = nil
+end
+if not target then
+target = pickTarget(body)
+engagedAt = os.clock()
+aimPart = target and (Settings.wsHead and target:FindFirstChild("Head", true) or target:FindFirstChild("UpperTorso", true) or target:FindFirstChild("HumanoidRootPart"))
+end
+if not target or not aimPart then
+stopWalking(humanoid, body)
+farmLabel.Text = "No enemies in range"
+return
+end
+local distance = (aimPart.Position - body.Position).Magnitude
+if distance > Settings.wsRange then
+if Settings.wsWalk then
+humanoid:MoveTo(aimPart.Position)
+walking = true
+engagedAt = os.clock()
+farmLabel.Text = string.format("Walking to %s (%d studs)", target.Name, distance)
+else
+target = nil
+farmLabel.Text = "No enemies in range"
+end
+return
+end
+stopWalking(humanoid, body)
+startAim()
+pcall(controller.shoot) -- the gun keeps its own fire rate and reloads
+farmLabel.Text = string.format("Shooting %s (%d studs)", target.Name, distance)
+end
+task.spawn(function()
+while hookState.alive do
+if Settings.wsFarm then
+local ok = pcall(farmTick)
+if not ok then target = nil end
+else
+if aiming then stopAim() end
+if walking then
+local _, humanoid, body = character()
+stopWalking(humanoid, body)
+end
+target, aimPart = nil, nil
+if farmLabel.Text ~= "Off" then farmLabel.Text = "Off" end
+end
+earnLabel.Text = string.format("$%s, %d kills", short(earned), kills)
+task.wait(0.05)
+end
+stopAim()
+end)
+local deadSince
+every("wsRespawn", 0.5, function()
+local char = LocalPlayer.Character
+local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+if humanoid and humanoid.Health > 0 then
+deadSince = nil
+return
+end
+deadSince = deadSince or os.clock()
+if os.clock() - deadSince > 1.5 then
+deadSince = os.clock() + 3
+Remotes.Lars.RespawnPlr:InvokeServer()
+end
+end)
+local tried = {}
+local function due(key, seconds)
+if tried[key] and os.clock() - tried[key] < seconds then return false end
+tried[key] = os.clock()
+return true
+end
+every("wsBuyGear", 3, function()
+local fw = framework()
+if not (fw and Ordered) then return end
+for _, category in ipairs({ "ranged", "melee", "armor", "explosives" }) do
+local list, best = Ordered[category] or {}, nil
+for _, item in ipairs(list) do
+if fw.purchases[item.name] and (not best or item.price > best.price) then best = item end
+end
+local nextItem
+for _, item in ipairs(list) do
+if not fw.purchases[item.name] and (not best or item.price > best.price) then
+nextItem = item
+break
+end
+end
+if nextItem and fw.purchases[nextItem.stage] and due(category .. nextItem.name, 15) then
+local ok = Remotes.BuyUpgrade:InvokeServer(category, nextItem.stage, nextItem.name)
+if ok then
+fw.purchases[nextItem.name] = true
+shopLabel.Text = nextItem.name
+if fw.loadout[category] ~= nextItem.name and Remotes.Equip:InvokeServer(category, nextItem.name) then
+fw.loadout[category] = nextItem.name
+end
+end
+end
+end
+end)
+local function stagesInOrder()
+local list = {}
+for name, data in pairs(Shop and Shop.stages or {}) do table.insert(list, { name = name, order = data.order or 0 }) end
+table.sort(list, function(a, b) return a.order < b.order end)
+return list
+end
+every("wsEra", 5, function()
+local fw = framework()
+if not fw then return end
+for _, stage in ipairs(stagesInOrder()) do
+if not fw.purchases[stage.name] then
+if due("era" .. stage.name, 20) then
+local ok = Remotes.Staging:InvokeServer("buy", stage.name)
+if ok then
+fw.purchases[stage.name] = true
+shopLabel.Text = stage.name .. " era"
+end
+end
+return
+end
+end
+end)
+every("wsTravel", 5, function()
+local fw = framework()
+if not fw then return end
+local newest
+for _, stage in ipairs(stagesInOrder()) do
+if fw.purchases[stage.name] then newest = stage.name end
+end
+if newest and LocalPlayer:GetAttribute("stage") ~= newest and due("travel" .. newest, 20) then
+Remotes.Staging:InvokeServer("travel", newest)
+end
+end)
+every("wsRebirth", 10, function()
+local fw = framework()
+if not (fw and Ordered and Ordered.rebirth) then return end
+for index, rank in ipairs(Ordered.rebirth) do
+if not (fw.rebirthdata and fw.rebirthdata[rank.name]) then
+if due("rebirth" .. rank.name, 30) then
+local order = index
+local gui = LocalPlayer.PlayerGui:FindFirstChild("RebirthShop")
+local slot = gui and gui:FindFirstChild(rank.name, true)
+if slot and slot:IsA("GuiObject") then order = slot.LayoutOrder end
+local ok = Remotes.BuyRebirth:InvokeServer(rank.name, order)
+if ok then
+fw.rebirthdata[rank.name] = true
+shopLabel.Text = rank.name .. " rank"
+end
+end
+return
+end
+end
+end)
+every("wsLegends", 30, function()
+local fw = framework()
+if not (fw and type(fw.legends) == "table") then return end
+for name, owned in pairs(fw.legends) do
+if not owned then
+local ok = Remotes.BuyLegend:InvokeServer(name)
+if ok then
+fw.legends[name] = true
+shopLabel.Text = name .. " legend"
+end
+task.wait(0.5)
+end
+end
+end)
+local visuals = new("Folder", { Name = "VigilWarSimulator", Parent = ROOT })
+local tags = {}
+local function untag(npc)
+local t = tags[npc]
+if t then
+t.gui:Destroy()
+t.highlight:Destroy()
+tags[npc] = nil
+end
+end
+task.spawn(function()
+while hookState.alive do
+local folder = workspace:FindFirstChild("Npcs")
+local _, _, body = character()
+if Settings.wsNpcEsp and folder then
+local list = {}
+for _, npc in ipairs(folder:GetChildren()) do
+local hrp = usable(npc)
+if hrp then
+table.insert(list, { npc = npc, hrp = hrp, d = body and (hrp.Position - body.Position).Magnitude or 0 })
+end
+end
+table.sort(list, function(a, b) return a.d < b.d end)
+local seen = {}
+for i = 1, math.min(#list, 25) do
+local npc, hrp = list[i].npc, list[i].hrp
+do
+seen[npc] = true
+local t = tags[npc]
+if not t then
+t = {}
+t.highlight = new("Highlight", {
+Adornee = npc, FillTransparency = 0.8, OutlineTransparency = 0,
+FillColor = Color3.fromRGB(255, 70, 70), OutlineColor = Color3.fromRGB(255, 110, 110),
+DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = visuals,
+})
+t.gui = new("BillboardGui", {
+Size = UDim2.fromOffset(200, 32), StudsOffset = Vector3.new(0, 4, 0), AlwaysOnTop = true,
+LightInfluence = 0, ResetOnSpawn = false, Adornee = hrp, Parent = visuals,
+})
+t.name = new("TextLabel", {
+Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, FontFace = Tokens.font, TextSize = 14,
+TextColor3 = Color3.fromRGB(255, 120, 120), TextStrokeTransparency = 0.35, Text = npc.Name, Parent = t.gui,
+})
+t.info = new("TextLabel", {
+Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+FontFace = Tokens.mono, TextSize = 11, TextColor3 = Color3.fromRGB(225, 225, 225),
+TextStrokeTransparency = 0.35, Parent = t.gui,
+})
+tags[npc] = t
+end
+local d = body and (hrp.Position - body.Position).Magnitude or 0
+local text = string.format("%dm  $%s", d, short(npc:GetAttribute("award")))
+if t.info.Text ~= text then t.info.Text = text end
+local isTarget = npc == target
+local color = isTarget and Color3.fromRGB(255, 210, 60) or Color3.fromRGB(255, 70, 70)
+if t.highlight.FillColor ~= color then
+t.highlight.FillColor, t.highlight.OutlineColor = color, color
+end
+end
+end
+for npc in pairs(tags) do
+if not seen[npc] then untag(npc) end
+end
+elseif next(tags) then
+for npc in pairs(tags) do untag(npc) end
+end
+task.wait(0.25)
+end
+for npc in pairs(tags) do untag(npc) end
+end)
+end
 local Games = {
+{ name = "War Simulator", gameId = 1751760283, placeId = 5062619730, build = buildWarSimulator },
 { name = "Agaric.io", gameId = 10015248476, placeId = 139160315848670, build = buildAgaric },
 { name = "Cast a Magnet", gameId = 10770026560, placeId = 103265940798818, build = buildCastAMagnet },
 { name = "Dueling Grounds", gameId = 9051406594, placeId = 94217045453265, build = buildDuelingGrounds },

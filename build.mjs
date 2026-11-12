@@ -5,7 +5,7 @@
 // with luau-compile -O0), not file size.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const LIMIT = 250_000; // sanity cap only
+const LIMIT = 400_000; // sanity cap only
 
 const source = readFileSync(new URL("./src/vigil.lua", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
