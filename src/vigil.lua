@@ -191,6 +191,11 @@ local Settings = {
 	camRebirth = false,
 	camRewards = false,
 	camSellEvery = 30,
+	agBot = false,
+	agAvoid = true,
+	agChase = false,
+	agSplit = false,
+	agRespawn = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4189,7 +4194,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5514,8 +5519,200 @@ local function buildCastAMagnet(p)
 	end)
 end
 
+local function buildAgaric(p)
+	local Storage = game:GetService("ReplicatedStorage")
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+
+	section(p, "Auto play")
+	switch(p, "Auto play", "agBot")
+	switch(p, "Run from bigger players", "agAvoid")
+	switch(p, "Chase smaller players", "agChase")
+	switch(p, "Split to eat", "agSplit")
+	local botLabel = readout("Status", "Off")
+	local cellLabel = readout("Cells", "0")
+	note(p, "Steers your cells with the game's own fixed-mouse control: toward food, gold and drops, away from players and spikes that could eat or pop you. Split to eat only splits when the half-size cell still beats the target and nothing bigger is close.")
+
+	section(p, "Respawn")
+	switch(p, "Auto respawn", "agRespawn")
+	note(p, "Presses the game's Respawn a couple of seconds after all your cells are gone.")
+
+	-- the client's input state (t_25) and its entity list, found once in memory
+	local Input, Entities, lookedAt = nil, nil, 0
+	local function locate()
+		if os.clock() - lookedAt < 3 then return end
+		lookedAt = os.clock()
+		local scan = getgc
+		if type(scan) ~= "function" then return end
+		for _, v in ipairs(scan(true)) do
+			if type(v) == "table" then
+				if not Input and rawget(v, "QuadSplitInterval") ~= nil and type(rawget(v, "RunBoundAction")) == "function" then Input = v end
+			elseif type(v) == "function" and not Entities and debug.info(v, "n") == "SpawnEntity" then
+				for _, up in pairs(debug.getupvalues(v)) do
+					if type(up) == "table" then
+						local _, e = next(up)
+						if type(e) == "table" and e.Type and e.ServerX then Entities = up break end
+					end
+				end
+			end
+			if Input and Entities then break end
+		end
+	end
+
+	local me = tostring(LocalPlayer.UserId)
+	local steering, goneSince, splitAt = false, nil, 0
+	local function aim(x, y)
+		Input.FixedMouseEnabled = true
+		Input.FixedMouseWorldX, Input.FixedMouseWorldY = x, y
+		steering = true
+	end
+	local function release()
+		if steering and Input then
+			Input.FixedMouseEnabled = false
+			Input.FixedMouseWorldX, Input.FixedMouseWorldY = nil, nil
+		end
+		steering = false
+	end
+	local PICKUPS = { Food = 1, EjectedMass = 3, Gold = 25, CaseDrop = 40 }
+
+	local function tick()
+		local mine, sx, sy, mass, big, small, team = 0, 0, 0, 0, 0, math.huge, nil
+		for _, e in pairs(Entities) do
+			if e.Type == "PlayerBlob" and e.PlayerUid == me then
+				local m = e.Radius * e.Radius
+				mine += 1
+				sx += e.ServerX * m
+				sy += e.ServerY * m
+				mass += m
+				big, small = math.max(big, e.Radius), math.min(small, e.Radius)
+				team = team or e.TeamId
+			end
+		end
+		cellLabel.Text = tostring(mine)
+
+		if mine == 0 then
+			release()
+			if Settings.agRespawn then
+				goneSince = goneSince or os.clock()
+				if os.clock() - goneSince > 2 then
+					goneSince = os.clock()
+					pcall(Input.RunBoundAction, "Respawn")
+				end
+				botLabel.Text = "Respawning"
+			else
+				botLabel.Text = "Not spawned"
+			end
+			return
+		end
+		goneSince = nil
+		if not Settings.agBot then
+			release()
+			botLabel.Text = "Off"
+			return
+		end
+
+		local cx, cy = sx / mass, sy / mass
+		local fx, fy, worst = 0, 0, 0
+		local function flee(dx, dy, d, w)
+			fx, fy, worst = fx - dx / d * w, fy - dy / d * w, math.max(worst, w)
+		end
+		local best, bestScore, bestDist
+		for _, e in pairs(Entities) do
+			local kind = e.Type
+			local dx, dy = e.ServerX - cx, e.ServerY - cy
+			local d = math.max(math.sqrt(dx * dx + dy * dy), 1)
+			if kind == "PlayerBlob" then
+				if e.PlayerUid ~= me and not (team ~= nil and e.TeamId == team) then
+					if e.Radius > small * 1.05 then -- the game eats at a 1.12 ratio; stay on the safe side
+						if Settings.agAvoid then
+							-- anything that can eat one of your cells, with room for its split lunge
+							local reach = e.Radius + big + 200 + (e.Radius / 1.42 > small * 1.05 and e.Radius * 1.5 + 200 or 0)
+							if d < reach then flee(dx, dy, d, (reach - d) / reach) end
+						end
+					elseif Settings.agChase and big > e.Radius * 1.12 then
+						local score = e.Radius * e.Radius / d * 0.05
+						if not bestScore or score > bestScore then best, bestScore, bestDist = e, score, d end
+					end
+				end
+			elseif kind == "Spike" then
+				if big > e.Radius * 1.1 then -- would pop you
+					local reach = e.Radius + big + 80
+					if d < reach then flee(dx, dy, d, (reach - d) / reach) end
+				end
+			elseif PICKUPS[kind] then
+				local score = PICKUPS[kind] / d
+				if not bestScore or score > bestScore then best, bestScore, bestDist = e, score, d end
+			end
+		end
+		local danger = worst > 0.35
+
+		-- keep off the map edge (the map is CurrentMapSize wide, centred on 0)
+		local size = Storage.Gameplay:GetAttribute("CurrentMapSize")
+		local wx, wy = 0, 0
+		if type(size) == "number" and size > 0 then
+			local half, margin = size / 2, big + 500
+			if cx > half - margin then wx = -(cx - (half - margin)) / margin end
+			if cx < -half + margin then wx = (-half + margin - cx) / margin end
+			if cy > half - margin then wy = -(cy - (half - margin)) / margin end
+			if cy < -half + margin then wy = (-half + margin - cy) / margin end
+		end
+
+		local dirX, dirY = 0, 0
+		if best then
+			dirX, dirY = (best.ServerX - cx) / bestDist, (best.ServerY - cy) / bestDist
+		elseif worst == 0 then
+			dirX, dirY = math.cos(os.clock() * 0.2), math.sin(os.clock() * 0.2)
+		end
+		if worst > 0 then
+			-- far threats only nudge you; close ones take over
+			local len = math.max(math.sqrt(fx * fx + fy * fy), 1e-3)
+			local pull = math.max(1 - worst * 1.5, 0)
+			dirX, dirY = dirX * pull + fx / len * worst * 2, dirY * pull + fy / len * worst * 2
+		end
+		dirX, dirY = dirX + wx * 2, dirY + wy * 2
+		botLabel.Text = danger and "Running" or best and (best.Type == "PlayerBlob" and "Chasing" or "Feeding") or "Looking for food"
+		local len = math.max(math.sqrt(dirX * dirX + dirY * dirY), 1e-3)
+		aim(cx + dirX / len * (big + 600), cy + dirY / len * (big + 600))
+
+		-- split onto a smaller player when the halves still win and nothing bigger is near
+		if Settings.agSplit and not danger and best and best.Type == "PlayerBlob" and os.clock() > splitAt
+			and big / math.sqrt(2) > best.Radius * 1.12 and bestDist < big * 2 + 300 and mine < 16 then
+			aim(best.ServerX, best.ServerY)
+			task.wait(0.05) -- let the game send the new target first
+			pcall(Input.RunBoundAction, "Split")
+			splitAt = os.clock() + 1.5
+			botLabel.Text = "Splitting"
+		end
+	end
+
+	task.spawn(function()
+		while hookState.alive do
+			if Settings.agBot or Settings.agRespawn then
+				if not (Input and Entities) then locate() end
+				if Input and Entities then
+					local ok = pcall(tick)
+					if not ok then release() end
+				else
+					botLabel.Text = "Waiting for the game"
+				end
+			elseif steering then
+				release()
+				botLabel.Text = "Off"
+			end
+			task.wait(0.1)
+		end
+		release()
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Agaric.io", gameId = 10015248476, placeId = 139160315848670, build = buildAgaric },
 	{ name = "Cast a Magnet", gameId = 10770026560, placeId = 103265940798818, build = buildCastAMagnet },
 	{ name = "Dueling Grounds", gameId = 9051406594, placeId = 94217045453265, build = buildDuelingGrounds },
 	{ name = "Build a PC", gameId = 10592694097, placeId = 133040801603256, build = buildBuildAPC },
