@@ -29,7 +29,7 @@ const result = header + out + "\n";
 // vigil-games.lua: the same script with only the Games tab
 const FLAG = "local GAMES_ONLY = false";
 if (out.split(FLAG).length !== 2) throw new Error(`expected exactly one "${FLAG}" line`);
-const games = "-- Vigil Games (built from src/vigil.lua)\n" + out.replace(FLAG, "local GAMES_ONLY = true") + "\n";
+const games = "-- Vigil Hub (built from src/vigil.lua)\n" + out.replace(FLAG, "local GAMES_ONLY = true") + "\n";
 
 for (const [file, text] of [["vigil.lua", result], ["vigil-games.lua", games]]) {
 	writeFileSync(new URL("./" + file, import.meta.url), text);

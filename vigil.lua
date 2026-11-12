@@ -435,7 +435,7 @@ bind(new("Frame", {
 Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BorderSizePixel = 0, Parent = UI.side,
 }), "BackgroundColor3", "border")
 bind(new("TextLabel", {
-Text = "Vigil", FontFace = Tokens.fontStrong, TextSize = 21, BackgroundTransparency = 1,
+Text = GAMES_ONLY and "Vigil Hub" or "Vigil", FontFace = Tokens.fontStrong, TextSize = 21, BackgroundTransparency = 1,
 TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(22, 20), Size = UDim2.fromOffset(120, 28), Parent = UI.side,
 }), "TextColor3", "text")
 UI.main = new("Frame", {
@@ -4652,11 +4652,12 @@ local current
 for _, entry in ipairs(Games) do
 if entry.gameId == game.GameId then current = entry end
 end
+UI.games, UI.currentGame = Games, current -- for the Vigil Hub loader
 if current then
 section(gamesPage, current.name)
 current.build(gamesPage)
 end
-local RELOAD = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/envidz/vigil/main/vigil.lua"))()'
+local RELOAD = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/envidz/vigil/main/' .. (GAMES_ONLY and "vigil-games.lua" or "vigil.lua") .. '"))()'
 local function join(entry)
 toast("Joining " .. entry.name)
 local queue = (typeof(queue_on_teleport) == "function" and queue_on_teleport) or (typeof(queueonteleport) == "function" and queueonteleport)
@@ -5644,7 +5645,167 @@ end)
 end
 local loaderGui, runLoader
 do
+local function hubLoader()
+loaderGui = new("ScreenGui", {
+Name = "VigilLoader", ResetOnSpawn = false, IgnoreGuiInset = true,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 9002, Parent = ROOT,
+})
+local backdrop = new("Frame", {
+Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+BackgroundTransparency = 1, BorderSizePixel = 0, Parent = loaderGui,
+})
+local blur
+pcall(function()
+blur = new("BlurEffect", { Size = 0, Parent = workspace.CurrentCamera })
+loaderGui.Destroying:Connect(function() blur:Destroy() end)
+end)
+local W, H, DOT = 420, 156, 56
+local card = new("CanvasGroup", {
+Size = UDim2.fromOffset(DOT, DOT), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+BackgroundColor3 = P.bg, BorderSizePixel = 0, GroupTransparency = 1, Parent = loaderGui,
+}, { round(Tokens.radius.lg) })
+new("UIStroke", { Color = P.border, Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = card })
+local cardScale = new("UIScale", { Scale = 0.6, Parent = card })
+new("Frame", {
+Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = card,
+}, { new("UIGradient", {
+Rotation = 90, Color = ColorSequence.new(P.gradTop, P.gradBottom),
+Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.42, 0.28), NumberSequenceKeypoint.new(1, 1),
+}),
+}) })
+local content = new("CanvasGroup", {
+Size = UDim2.fromOffset(W, H), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+BackgroundTransparency = 1, GroupTransparency = 1, Parent = card,
+})
+local title = new("TextLabel", {
+Text = "Vigil", FontFace = Tokens.fontStrong, TextSize = 30, TextColor3 = P.text, TextTransparency = 1,
+TextXAlignment = Enum.TextXAlignment.Left, AutomaticSize = Enum.AutomaticSize.X,
+Size = UDim2.fromOffset(0, 36), Position = UDim2.fromOffset(28, 30), BackgroundTransparency = 1, Parent = content,
+})
+local badge = new("CanvasGroup", {
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 22), BackgroundColor3 = P.accent,
+BorderSizePixel = 0, GroupTransparency = 1, Parent = content,
+}, { round("full"), new("UIPadding", { PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }) })
+new("TextLabel", {
+Text = "HUB", FontFace = Tokens.mono, TextSize = 12, TextColor3 = P.onAccent, AutomaticSize = Enum.AutomaticSize.X,
+Size = UDim2.fromScale(0, 1), BackgroundTransparency = 1, Parent = badge,
+})
+local eyebrow = new("TextLabel", {
+Text = "DETECTED GAME", FontFace = Tokens.mono, TextSize = 11, TextColor3 = P.muted, TextTransparency = 1,
+TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(28, 72), Size = UDim2.fromOffset(W - 56, 16),
+BackgroundTransparency = 1, Parent = content,
+})
+local ROW = 26
+local slot = new("Frame", {
+Position = UDim2.fromOffset(28, 90), Size = UDim2.fromOffset(W - 56, ROW), ClipsDescendants = true,
+BackgroundTransparency = 1, Parent = content,
+})
+local column = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = slot },
+{ new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }) })
+local names = {}
+local current = UI.currentGame
+for _ = 1, 3 do
+for _, entry in ipairs(UI.games or {}) do table.insert(names, entry.name) end
+end
+for i = #names, 2, -1 do
+local j = math.random(1, i)
+names[i], names[j] = names[j], names[i]
+end
+table.insert(names, current and current.name or "No supported game")
+for i, name in ipairs(names) do
+local last = i == #names
+new("TextLabel", {
+Text = name, FontFace = last and Tokens.fontStrong or Tokens.font, TextSize = 18,
+TextColor3 = (last and current) and P.text or P.muted, TextXAlignment = Enum.TextXAlignment.Left,
+TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, ROW), LayoutOrder = i,
+BackgroundTransparency = 1, Parent = column,
+})
+end
+local track = new("Frame", {
+Size = UDim2.new(1, -56, 0, 2), Position = UDim2.new(0, 28, 1, -26),
+BackgroundColor3 = P.raised, BorderSizePixel = 0, Parent = content,
+}, { round("full") })
+local fill = new("Frame", {
+Size = UDim2.fromScale(0, 1), BackgroundColor3 = P.accent, BorderSizePixel = 0, Parent = track,
+}, { round("full") })
+local images, seen, total = {}, {}, 0
+for _, d in ipairs(Holder:GetDescendants()) do
+if d:IsA("ImageLabel") and d.Image ~= "" then
+table.insert(images, d)
+if not seen[d.Image] then
+seen[d.Image] = true
+total += 1
+end
+end
+end
+local done, finished = 0, false
+task.spawn(function()
+pcall(function()
+game:GetService("ContentProvider"):PreloadAsync(images, function() done += 1 end)
+end)
+finished = true
+end)
+local alive = function() return loaderGui and loaderGui.Parent ~= nil end
+local fast = reducedMotion
+task.spawn(function()
+tweenStyle(backdrop, { BackgroundTransparency = 0.55 }, 0.4, Enum.EasingStyle.Quad)
+if blur then tweenStyle(blur, { Size = 18 }, 0.5, Enum.EasingStyle.Quad) end
+tweenStyle(card, { GroupTransparency = 0 }, 0.25, Enum.EasingStyle.Quad)
+tweenStyle(cardScale, { Scale = 1 }, 0.45, Enum.EasingStyle.Back)
+task.wait(fast and 0 or 0.32)
+if not alive() then return end
+tweenStyle(card, { Size = UDim2.fromOffset(W, DOT) }, 0.45)
+task.wait(fast and 0 or 0.22)
+tweenStyle(card, { Size = UDim2.fromOffset(W, H) }, 0.45)
+tweenStyle(content, { GroupTransparency = 0 }, 0.3, Enum.EasingStyle.Quad)
+task.wait(fast and 0 or 0.12)
+if not alive() then return end
+tweenStyle(title, { TextTransparency = 0, Position = UDim2.fromOffset(28, 22) }, 0.5)
+task.wait()
+local badgeAt = 28 + title.TextBounds.X + 10
+badge.Position = UDim2.fromOffset(badgeAt + 14, 30)
+task.wait(fast and 0 or 0.16)
+tweenStyle(badge, { GroupTransparency = 0, Position = UDim2.fromOffset(badgeAt, 30) }, 0.45, Enum.EasingStyle.Back)
+task.wait(fast and 0 or 0.12)
+tweenStyle(eyebrow, { TextTransparency = 0 }, 0.35, Enum.EasingStyle.Quad)
+local stop = UDim2.fromOffset(0, -ROW * (#names - 1))
+if fast then
+column.Position = stop
+else
+TweenService:Create(column, TweenInfo.new(1.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Position = stop }):Play()
+end
+local start, shown = os.clock(), 0
+local minimum = fast and 0 or 1.5
+while alive() do
+local dt = task.wait()
+local elapsed = os.clock() - start
+local target = (finished or elapsed > 6) and 1 or math.min(total > 0 and done / total or 0, 0.96)
+shown += (target - shown) * math.min(1, dt * 8)
+if target == 1 and shown > 0.995 then shown = 1 end
+fill.Size = UDim2.fromScale(shown, 1)
+if shown == 1 and elapsed >= minimum then break end
+end
+if not alive() then return end
+task.wait(fast and 0 or 0.35)
+if not alive() then return end
+tweenStyle(content, { GroupTransparency = 1 }, 0.16, Enum.EasingStyle.Quad)
+tweenStyle(card, { Size = UDim2.fromOffset(W, DOT) }, 0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+task.wait(fast and 0 or 0.2)
+tweenStyle(card, { Size = UDim2.fromOffset(DOT, DOT) }, 0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+task.wait(fast and 0 or 0.18)
+tweenStyle(card, { GroupTransparency = 1 }, 0.2, Enum.EasingStyle.Quad)
+tweenStyle(cardScale, { Scale = 0.6 }, 0.25, Enum.EasingStyle.Quad)
+tweenStyle(backdrop, { BackgroundTransparency = 1 }, 0.42, Enum.EasingStyle.Quad)
+if blur then tweenStyle(blur, { Size = 0 }, 0.42, Enum.EasingStyle.Quad) end
+setMenuVisible(true)
+task.wait(fast and 0 or 0.5)
+if loaderGui then loaderGui:Destroy() end
+loaderGui = nil
+end)
+end
 function runLoader()
+if GAMES_ONLY then return hubLoader() end
 loaderGui = new("ScreenGui", {
 Name = "VigilLoader", ResetOnSpawn = false, IgnoreGuiInset = true,
 ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 9002, Parent = ROOT,
