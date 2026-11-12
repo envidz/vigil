@@ -209,6 +209,9 @@ local Settings = {
 	wsRange = 150,
 	wsHead = true,
 	wsEquip = true,
+	wsGroup = false,
+	wsGroupDist = 30,
+	wsGroupMax = 8,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4207,7 +4210,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5761,6 +5764,13 @@ local function buildWarSimulator(p)
 	local earnLabel = readout("Earned", "$0, 0 kills")
 	note(p, "Aims at enemies of your current era and fires through your gun's own trigger, so fire rate, reloads and spread stay exactly as the game made them. Walk to targets moves you with normal walking, never faster. It switches target when shots stop landing.")
 
+	section(p, "Group enemies")
+	switch(p, "Group enemies", "wsGroup")
+	slider(p, "Distance", "wsGroupDist", 10, 120, 5, function(v) return string.format("%d studs", v) end)
+	slider(p, "How many", "wsGroupMax", 1, 20, 1, function(v) return tostring(v) end)
+	local groupLabel = readout("Holding", "0")
+	note(p, "Pulls the nearest enemies of your era into a tight block in front of you, so none of them can hide behind cover. Your game runs their physics, so where you put them is where the server sees them. Pairs well with Auto farm.")
+
 	section(p, "ESP")
 	switch(p, "Enemy ESP", "wsNpcEsp")
 	note(p, "Outlines enemies of your era with their name, distance and kill reward.")
@@ -6109,6 +6119,50 @@ local function buildWarSimulator(p)
 					shopLabel.Text = name .. " legend"
 				end
 				task.wait(0.5)
+			end
+		end
+	end)
+
+	-- group enemies: your client simulates their physics, so hold them in a block ahead of you
+	local held, heldRefresh = {}, 0
+	local function owns(part)
+		if type(isnetworkowner) ~= "function" then return true end
+		local ok, result = pcall(isnetworkowner, part)
+		return not ok or result
+	end
+	connect(RunService.Heartbeat, function()
+		if not Settings.wsGroup then
+			if #held > 0 then
+				held = {}
+				groupLabel.Text = "0"
+			end
+			return
+		end
+		local _, _, body = character()
+		if not body then return end
+		if os.clock() - heldRefresh > 0.5 then
+			heldRefresh = os.clock()
+			local list = {}
+			local folder = workspace:FindFirstChild("Npcs")
+			for _, npc in ipairs(folder and folder:GetChildren() or {}) do
+				local hrp = usable(npc)
+				if hrp and owns(hrp) then
+					table.insert(list, { hrp = hrp, d = (hrp.Position - body.Position).Magnitude })
+				end
+			end
+			table.sort(list, function(a, b) return a.d < b.d end)
+			held = {}
+			for i = 1, math.min(#list, Settings.wsGroupMax) do held[i] = list[i].hrp end
+			groupLabel.Text = tostring(#held)
+		end
+		local flat = CFrame.lookAt(body.Position, body.Position + body.CFrame.LookVector * Vector3.new(1, 0, 1))
+		for i, hrp in ipairs(held) do
+			if hrp.Parent then
+				local column, rank = (i - 1) % 4, math.floor((i - 1) / 4)
+				local spot = flat * CFrame.new((column - 1.5) * 5, 0, -Settings.wsGroupDist - rank * 5)
+				hrp.CFrame = CFrame.lookAt(spot.Position, body.Position * Vector3.new(1, 0, 1) + Vector3.new(0, spot.Position.Y, 0))
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
 			end
 		end
 	end)
