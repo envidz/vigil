@@ -185,6 +185,12 @@ local Settings = {
 	dgParry = false,
 	dgParryLead = 65,
 	dgParryTune = false,
+	camFish = false,
+	camSell = false,
+	camUpgrade = false,
+	camRebirth = false,
+	camRewards = false,
+	camSellEvery = 30,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4183,7 +4189,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5296,8 +5302,206 @@ local function buildDuelingGrounds(p)
 	end
 end
 
+local function buildCastAMagnet(p)
+	local Storage = game:GetService("ReplicatedStorage")
+	local function every(key, seconds, job)
+		task.spawn(function()
+			while hookState.alive do
+				if Settings[key] then pcall(job) end
+				task.wait(type(seconds) == "function" and seconds() or seconds)
+			end
+		end)
+	end
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+
+	section(p, "Fishing")
+	switch(p, "Auto fish", "camFish")
+	local fishLabel = readout("Status", "Off")
+	note(p, "Stand in a fishing spot. Casts with a perfect 0.8 second hold for the 3x luck bonus, then reels the catch in, over and over.")
+
+	section(p, "Money")
+	switch(p, "Auto sell", "camSell")
+	slider(p, "Sell every", "camSellEvery", 10, 180, 5, function(v) return string.format("%d s", v) end)
+	switch(p, "Auto upgrade", "camUpgrade")
+	switch(p, "Auto rebirth", "camRebirth")
+	local cashLabel = readout("Cash", "0")
+	note(p, "Selling and upgrading only work at their stations, so between casts it hops to the Sell and Upgrades stations and straight back. Auto upgrade buys the cheapest of luck, rope length and reel power you can afford. Auto rebirth resets your cash whenever the game lets you rebirth.")
+
+	section(p, "Rewards")
+	switch(p, "Auto claim rewards", "camRewards")
+	note(p, "Claims the daily login reward and offline earnings when they're ready.")
+
+	local controllers = LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Controllers", 15)
+	local loaded, Fishing, Data, Net, Upgrades = pcall(function()
+		return require(controllers.FishingController), require(controllers.PlayerData),
+			require(Storage.Shared.Net), require(Storage.Shared.Config.UpgradeConfig)
+	end)
+	if not loaded then
+		fishLabel.Text = "Unavailable"
+		return
+	end
+	local function invoke(name, payload)
+		return Net.Get(name):InvokeServer(payload)
+	end
+	local function data()
+		local ok, d = pcall(function() return Data:Get() end)
+		return ok and type(d) == "table" and d or Data.Data or {}
+	end
+
+	-- the controller's own charge, release and reel tap (what your mouse does)
+	local canCast, startCharge, release, tap
+	pcall(function()
+		local list = debug.getupvalues(Fishing.QACast)
+		for i = 1, #list do
+			local v = list[i]
+			if type(v) == "function" then
+				if debug.info(v, "n") == "canCast" then
+					canCast = v
+				elseif not startCharge then
+					startCharge = v
+				elseif not release then
+					release = v
+				end
+			end
+		end
+		for _, v in pairs(debug.getupvalues(Fishing.QATap)) do
+			if type(v) == "function" then tap = v end
+		end
+	end)
+
+	local catches = 0
+	connect(Fishing.Caught, function() catches += 1 end)
+
+	-- selling and upgrading need you at their station: hop there between casts
+	local function root()
+		local character = LocalPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 or humanoid.SeatPart then return end
+		return character:FindFirstChild("HumanoidRootPart")
+	end
+	local function stationPart(name)
+		local map = workspace:FindFirstChild("Map")
+		local stations = map and map:FindFirstChild("Hub") and map.Hub:FindFirstChild("Stations")
+		local station = stations and stations:FindFirstChild(name)
+		return station and (station:FindFirstChild("PromptPart") or station:FindFirstChildWhichIsA("BasePart", true))
+	end
+	local function visit(name, job)
+		local part, body = stationPart(name), root()
+		if not part or not body then return end
+		body.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+		body.AssemblyLinearVelocity = Vector3.zero
+		task.wait(0.35) -- let the server see you there
+		pcall(job)
+	end
+
+	local function nextUpgrade()
+		local d = data()
+		local cash, bestKey, bestPrice = d.Cash or 0, nil, nil
+		for _, key in ipairs(Upgrades.Order or {}) do
+			local upgrade = Upgrades.Upgrades[key]
+			local nextLevel = upgrade and upgrade.Levels[(d[upgrade.DataKey] or 1) + 1]
+			if nextLevel and type(nextLevel.Price) == "number" and nextLevel.Price <= cash and (not bestPrice or nextLevel.Price < bestPrice) then
+				bestKey, bestPrice = key, nextLevel.Price
+			end
+		end
+		return bestKey
+	end
+
+	local sellAt, upgradeRetry = 0, 0
+	local function stationWork()
+		local now = os.clock()
+		local sell = Settings.camSell and now >= sellAt and (Data:InventoryCount() or 0) > 0
+		local upgrade = Settings.camUpgrade and now >= upgradeRetry and nextUpgrade() ~= nil
+		if not sell and not upgrade then return false end
+		local body = root()
+		if not body then return false end
+		local home = body.CFrame
+		if sell then
+			fishLabel.Text = "Selling"
+			visit("SellStation", function() invoke("SellRequest", { Action = "SellAll" }) end)
+			sellAt = os.clock() + Settings.camSellEvery
+		end
+		if Settings.camUpgrade and nextUpgrade() then
+			fishLabel.Text = "Upgrading"
+			visit("UpgradeStation", function()
+				for _ = 1, 15 do
+					local key = nextUpgrade()
+					if not key then break end
+					local result = invoke("UpgradeRequest", { Key = key })
+					if type(result) == "table" and result.Ok == false then break end
+					task.wait(0.15)
+				end
+			end)
+		end
+		upgradeRetry = os.clock() + 5
+		body = root()
+		if body then
+			task.wait(0.15)
+			body.CFrame = home
+			body.AssemblyLinearVelocity = Vector3.zero
+			task.wait(0.3)
+		end
+		return true
+	end
+
+	local fishReady = canCast and startCharge and release and tap
+	task.spawn(function()
+		while hookState.alive do
+			local ok, state = pcall(Fishing.GetState, Fishing)
+			state = ok and state or "?"
+			if state == "Idle" and pcall(stationWork) then
+				-- (a station trip, if one was due, has already happened)
+			end
+			if Settings.camFish and fishReady then
+				state = Fishing:GetState()
+				if state == "Idle" then
+					if pcall(canCast) and canCast() then
+						pcall(startCharge)
+						task.wait(0.8) -- inside the perfect window
+						if Fishing:GetState() == "Charging" then pcall(release) end
+					else
+						fishLabel.Text = "Stand in a fishing spot"
+					end
+				elseif state == "Reeling" then
+					pcall(tap) -- the game limits its own tap rate
+				end
+				if state ~= "Idle" then fishLabel.Text = string.format("%s, %d caught", state, catches) end
+			elseif not fishReady then
+				fishLabel.Text = "Unavailable here"
+			elseif fishLabel.Text ~= "Off" and not (Settings.camSell or Settings.camUpgrade) then
+				fishLabel.Text = "Off"
+			end
+			task.wait(0.05)
+		end
+	end)
+
+	every("camRebirth", 10, function()
+		invoke("RebirthRequest", { Action = "Rebirth" })
+	end)
+
+	every("camRewards", 60, function()
+		pcall(invoke, "DailyLoginRequest", { Action = "Claim" })
+		pcall(invoke, "OfflineRequest", { Action = "Claim" })
+	end)
+
+	task.spawn(function()
+		while hookState.alive do
+			local cash = data().Cash or 0
+			cashLabel.Text = cash >= 1e6 and string.format("%.2fM", cash / 1e6) or cash >= 1e3 and string.format("%.1fK", cash / 1e3) or tostring(math.floor(cash))
+			task.wait(0.5)
+		end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Cast a Magnet", gameId = 10770026560, placeId = 103265940798818, build = buildCastAMagnet },
 	{ name = "Dueling Grounds", gameId = 9051406594, placeId = 94217045453265, build = buildDuelingGrounds },
 	{ name = "Build a PC", gameId = 10592694097, placeId = 133040801603256, build = buildBuildAPC },
 	{ name = "Military Tycoon", gameId = 2788648141, placeId = 7180042682, build = buildMilitaryTycoon },
