@@ -232,6 +232,8 @@ flySpeed = 60,
 noclip = false,
 clickTp = false,
 showModules = true,
+hudTop = true,
+hudTaskbar = true,
 theme = "Dark",
 accentColour = 1,
 menuKey = "RightShift",
@@ -1023,6 +1025,7 @@ local GROUPS = GAMES_ONLY and { { "Games", { "games" } } } or {
 { "Tools", { "spy" } },
 }
 local NAV_TOP = GAMES_ONLY and 58 or 100 -- no search field in the games build
+UI.tabById, UI.groups = tabById, GROUPS -- for the taskbar
 local masterHost = new("Frame", {
 Size = UDim2.fromOffset(120, 34), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -32, 0, 40),
 BackgroundTransparency = 1, Visible = false, Parent = UI.main,
@@ -1563,6 +1566,8 @@ buttonRow(settingsPage, "Combat preset", buttons)
 end
 section(settingsPage, "Appearance")
 switch(settingsPage, "Show active modules", "showModules")
+switch(settingsPage, "Top bar", "hudTop")
+switch(settingsPage, "Taskbar", "hudTaskbar")
 switch(settingsPage, "Loading screen", "showLoader")
 segmented(settingsPage, "Theme", "theme", { "Dark", "Light" }, function() applyTheme() end)
 swatches(settingsPage, "Accent", "accentColour", Accents)
@@ -6423,6 +6428,308 @@ radarStep(camera)
 espStep() -- last, so boxes use this frame's final camera and never trail behind
 end)
 do
+local hudGui = new("ScreenGui", {
+Name = "VigilHud", ResetOnSpawn = false, IgnoreGuiInset = true,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 9002, Parent = ROOT,
+})
+UI.hudGui = hudGui -- destroyed on unload
+local function hstack(parent, gap, order)
+return new("Frame", {
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromScale(0, 1), BackgroundTransparency = 1,
+LayoutOrder = order or 0, Parent = parent,
+}, {
+new("UIListLayout", {
+FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, gap),
+VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder,
+}),
+})
+end
+local function text(parent, value, font, size, token, order)
+return bind(new("TextLabel", {
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 14), BackgroundTransparency = 1,
+FontFace = font, TextSize = size, Text = value, LayoutOrder = order or 0, Parent = parent,
+}), "TextColor3", token)
+end
+local function divider(parent, order, height)
+return bind(new("Frame", {
+Size = UDim2.fromOffset(1, height or 12), BorderSizePixel = 0, BackgroundTransparency = 0.2,
+LayoutOrder = order, Parent = parent,
+}), "BackgroundColor3", "divider")
+end
+local function shell(props, radius)
+local frame = new("Frame", props, {
+round(radius),
+new("UIStroke", { Thickness = 1, Transparency = 0.25, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+})
+bind(frame, "BackgroundColor3", "bg")
+bind(frame:FindFirstChildOfClass("UIStroke"), "Color", "border")
+return frame
+end
+local function brandTile(parent, size, order)
+local tile = new("Frame", { Size = UDim2.fromOffset(size, size), BorderSizePixel = 0, LayoutOrder = order, Parent = parent }, { round(math.floor(size * 0.3)) })
+bind(tile, "BackgroundColor3", "accent")
+bind(new("TextLabel", {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, FontFace = Tokens.fontStrong,
+TextSize = math.floor(size * 0.66), Text = "V", Parent = tile,
+}), "TextColor3", "onAccent")
+return tile
+end
+local topBar = shell({
+Name = "TopBar", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 28), BackgroundTransparency = 0.12,
+Parent = hudGui,
+}, "full")
+new("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7), Parent = topBar })
+new("UIListLayout", {
+FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 10),
+VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Parent = topBar,
+})
+local brand = hstack(topBar, 6, 1)
+brandTile(brand, 16, 1)
+text(brand, "Vigil", Tokens.fontStrong, 13, "text", 2)
+if GAMES_ONLY then text(brand, "HUB", Tokens.mono, 10, "accent", 3) end
+divider(topBar, 2)
+local function stat(order, unit)
+local box = hstack(topBar, 3, order)
+local value = text(box, "-", Tokens.fontStrong, 12, "text", 1)
+local label = text(box, unit, Tokens.mono, 10, "faint", 2)
+return value, label, box
+end
+local fpsValue = stat(3, "FPS")
+local lowValue, lowLabel = stat(4, "1% LOW")
+local bars = {}
+local spark = new("Frame", { Size = UDim2.fromOffset(43, 14), BackgroundTransparency = 1, LayoutOrder = 5, Parent = topBar }, {
+new("UIListLayout", {
+FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 1),
+VerticalAlignment = Enum.VerticalAlignment.Bottom, SortOrder = Enum.SortOrder.LayoutOrder,
+}),
+})
+for i = 1, 14 do
+bars[i] = bind(new("Frame", {
+Size = UDim2.new(0, 2, 0.15, 0), BorderSizePixel = 0, BackgroundTransparency = 0.45, LayoutOrder = i, Parent = spark,
+}, { round(1) }), "BackgroundColor3", "accent")
+end
+divider(topBar, 6)
+local pingValue = stat(7, "MS")
+local memValue, memUnit = stat(8, "MB")
+divider(topBar, 9)
+local playersBox = hstack(topBar, 4, 10)
+local playersIcon, tintPlayers = iconImage("players", 12, playersBox)
+playersIcon.LayoutOrder = 1
+onTheme(function() tintPlayers(P.muted) end)
+local playersValue = text(playersBox, "-", Tokens.fontStrong, 12, "text", 2)
+local clockValue = text(topBar, "--:--", Tokens.fontStrong, 12, "text", 11)
+divider(topBar, 12)
+local userBox = hstack(topBar, 6, 13)
+new("ImageLabel", {
+Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, LayoutOrder = 1, Parent = userBox,
+Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=48&h=48",
+}, { round("full") })
+text(userBox, LocalPlayer.DisplayName, Tokens.font, 12, "muted", 2)
+local frameTimes, frameIndex = table.create(300, 0), 0
+local history = table.create(14, 0)
+local fpsAcc, fpsFrames, sparkAcc, textAcc = 0, 0, 0, 1
+local fps = 0
+connect(RunService.RenderStepped, function(dt)
+frameIndex = frameIndex % 300 + 1
+frameTimes[frameIndex] = dt
+fpsAcc += dt
+fpsFrames += 1
+sparkAcc += dt
+textAcc += dt
+if fpsAcc >= 0.5 then
+fps = fpsFrames / fpsAcc
+fpsAcc, fpsFrames = 0, 0
+end
+if not Settings.hudTop then
+if topBar.Visible then topBar.Visible = false end
+return
+end
+if not topBar.Visible then topBar.Visible = true end
+if sparkAcc >= 0.25 then
+sparkAcc = 0
+table.remove(history, 1)
+table.insert(history, fps)
+local low, high = math.huge, 0
+for _, v in ipairs(history) do
+if v > 0 then low, high = math.min(low, v), math.max(high, v) end
+end
+local span = math.max(high - low, high * 0.08, 1)
+for i, bar in ipairs(bars) do
+local v = history[i]
+bar.Size = UDim2.new(0, 2, v > 0 and math.clamp(0.3 + 0.7 * (v - (high - span)) / span, 0.15, 1) or 0.15, 0)
+end
+end
+if textAcc < 0.5 then return end
+textAcc = 0
+fpsValue.Text = tostring(math.floor(fps + 0.5))
+local sorted = {}
+for _, t in ipairs(frameTimes) do if t > 0 then table.insert(sorted, t) end end
+table.sort(sorted, function(a, b) return a > b end)
+local worst = math.max(1, math.floor(#sorted / 100))
+local sum = 0
+for i = 1, math.min(worst, #sorted) do sum += sorted[i] end
+lowValue.Text = sum > 0 and tostring(math.floor(worst / sum + 0.5)) or "-"
+local ping
+pcall(function() ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() end)
+if not ping then pcall(function() ping = LocalPlayer:GetNetworkPing() * 2000 end) end
+pingValue.Text = ping and tostring(math.floor(ping + 0.5)) or "-"
+local mb = 0
+pcall(function() mb = game:GetService("Stats"):GetTotalMemoryUsageMb() end)
+if mb >= 1024 then
+memValue.Text, memUnit.Text = string.format("%.2f", mb / 1024), "GB"
+else
+memValue.Text, memUnit.Text = tostring(math.floor(mb)), "MB"
+end
+playersValue.Text = string.format("%d/%d", #Players:GetPlayers(), Players.MaxPlayers)
+clockValue.Text = os.date("%H:%M")
+end)
+topBar.Position = UDim2.new(0.5, 0, 0, -40)
+tweenStyle(topBar, { Position = UDim2.new(0.5, 0, 0, 10) }, 0.6)
+local taskbar = shell({
+Name = "Taskbar", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -12),
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 48), BackgroundTransparency = 0.1,
+Parent = hudGui,
+}, Tokens.radius.card)
+new("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 12), Parent = taskbar })
+new("UIListLayout", {
+FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
+VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Parent = taskbar,
+})
+local hoverTip = shell({
+AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 24),
+BackgroundTransparency = 0.05, Visible = false, ZIndex = 5, Parent = hudGui,
+}, Tokens.radius.sm)
+new("UIPadding", { PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9), Parent = hoverTip })
+local hoverText = bind(new("TextLabel", {
+AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromScale(0, 1), BackgroundTransparency = 1,
+FontFace = Tokens.font, TextSize = 12, ZIndex = 6, Parent = hoverTip,
+}), "TextColor3", "text")
+local hoverOwner
+local function hover(button, label)
+connect(button.MouseEnter, function()
+hoverOwner = button
+hoverText.Text = label
+local pos, size = button.AbsolutePosition, button.AbsoluteSize
+hoverTip.Position = UDim2.fromOffset(pos.X + size.X / 2, pos.Y + GuiService:GetGuiInset().Y - 8) -- AbsolutePosition is measured below the top inset
+hoverTip.Visible = true
+end)
+connect(button.MouseLeave, function()
+if hoverOwner == button then hoverTip.Visible = false end
+end)
+end
+local function taskButton(order, label)
+local button = new("TextButton", {
+Size = UDim2.fromOffset(36, 36), Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+BackgroundTransparency = 1, LayoutOrder = order, Parent = taskbar,
+}, { round(Tokens.radius.md) })
+bind(button, "BackgroundColor3", "raised")
+hover(button, label)
+return button
+end
+local home = taskButton(1, "Vigil  (" .. bindName(Settings.menuKey) .. ")")
+local homeTile = brandTile(home, 26, 1)
+homeTile.AnchorPoint, homeTile.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+connect(home.Activated, function() setMenuVisible(not (menuOpen and Holder.Visible)) end)
+divider(taskbar, 2, 22)
+local ids = {}
+for _, group in ipairs(UI.groups) do
+for _, id in ipairs(group[2]) do table.insert(ids, id) end
+end
+if not GAMES_ONLY then table.insert(ids, "settings") end
+local items = {}
+for i, id in ipairs(ids) do
+local tab = UI.tabById[id]
+if tab then
+local button = taskButton(10 + i, tab.title)
+local image, tint = iconImage(id, 18, button)
+image.AnchorPoint, image.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+local dot = bind(new("Frame", {
+AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -3), Size = UDim2.fromOffset(4, 4),
+BorderSizePixel = 0, Visible = false, ZIndex = 3, Parent = button,
+}, { round("full") }), "BackgroundColor3", "accent")
+connect(button.Activated, function()
+if menuOpen and Holder.Visible and UI.currentTab == id then
+setMenuVisible(false)
+else
+selectTab(id)
+setMenuVisible(true)
+end
+end)
+connect(button.MouseEnter, function() if UI.currentTab ~= id or not menuOpen then tween(button, { BackgroundTransparency = 0.6 }, 0.12) end end)
+connect(button.MouseLeave, function() if UI.currentTab ~= id or not menuOpen then tween(button, { BackgroundTransparency = 1 }, 0.12) end end)
+items[id] = { button = button, tint = tint, dot = dot, master = tab.master }
+end
+end
+if GAMES_ONLY then
+local current = UI.currentGame
+text(taskbar, current and current.name or "No game detected", Tokens.font, 13, current and "text" or "muted", 60)
+end
+divider(taskbar, 70, 22)
+local clockStack = new("Frame", { AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 32), BackgroundTransparency = 1, LayoutOrder = 71, Parent = taskbar }, {
+new("UIListLayout", { HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }),
+new("UIPadding", { PaddingLeft = UDim.new(0, 6) }),
+})
+local timeLabel = text(clockStack, "--:--", Tokens.fontStrong, 13, "text", 1)
+local dateLabel = text(clockStack, "", Tokens.mono, 10, "faint", 2)
+timeLabel.TextXAlignment, dateLabel.TextXAlignment = Enum.TextXAlignment.Right, Enum.TextXAlignment.Right
+local lastPaint
+local function paintTaskbar()
+local parts = { tostring(menuOpen and Holder.Visible), tostring(UI.currentTab), Settings.theme, tostring(Settings.accentColour) }
+for id, item in pairs(items) do table.insert(parts, id .. tostring(item.master and Settings[item.master])) end
+local signature = table.concat(parts, ";")
+if signature == lastPaint then return end
+lastPaint = signature
+local open = menuOpen and Holder.Visible
+for id, item in pairs(items) do
+local active = open and UI.currentTab == id
+item.tint(active and P.text or P.nav)
+item.button.BackgroundTransparency = active and 0 or 1
+item.dot.Visible = item.master ~= nil and Settings[item.master] == true
+end
+end
+onTheme(function() lastPaint = nil end)
+local handle = bind(new("Frame", {
+AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -5), Size = UDim2.fromOffset(46, 4),
+BorderSizePixel = 0, BackgroundTransparency = 0.45, Parent = hudGui,
+}, { round("full") }), "BackgroundColor3", "muted")
+local shown, introDone = nil, false
+local taskAcc = 1
+connect(RunService.Heartbeat, function(dt)
+taskAcc += dt
+if taskAcc < 0.1 then return end
+taskAcc = 0
+taskbar.Visible = Settings.hudTaskbar
+handle.Visible = Settings.hudTaskbar and shown == false
+if not Settings.hudTaskbar then
+hoverTip.Visible = false
+return
+end
+if introDone then
+local camera = workspace.CurrentCamera
+local mouse = UserInputService:GetMouseLocation()
+local nearBottom = camera and mouse.Y > camera.ViewportSize.Y - 80
+and math.abs(mouse.X - camera.ViewportSize.X / 2) < taskbar.AbsoluteSize.X / 2 + 120
+local want = (menuOpen and Holder.Visible) or nearBottom or (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
+if want ~= shown then
+shown = want
+if not want then hoverTip.Visible = false end
+tweenStyle(taskbar, { Position = want and UDim2.new(0.5, 0, 1, -12) or UDim2.new(0.5, 0, 1, 60) }, want and 0.45 or 0.3,
+Enum.EasingStyle.Quint, want and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+end
+end
+paintTaskbar()
+timeLabel.Text = os.date("%H:%M")
+dateLabel.Text = os.date("%a %d %b")
+end)
+taskbar.Position = UDim2.new(0.5, 0, 1, 60)
+task.delay(0.15, function()
+tweenStyle(taskbar, { Position = UDim2.new(0.5, 0, 1, -12) }, 0.6)
+task.wait(2.5) -- let it be seen once, then it tucks away
+shown, introDone = true, true
+end)
+end
+do
 local modulesList = new("Frame", {
 Name = "ActiveModules", AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -Tokens.space.lg, 0, Tokens.space.lg),
@@ -6824,6 +7131,7 @@ table.clear(connections)
 for player in pairs(Esp) do removeEsp(player) end
 espGui:Destroy()
 menuGui:Destroy()
+if UI.hudGui then UI.hudGui:Destroy() end
 if loaderGui then pcall(function() loaderGui:Destroy() end) end
 highlightFolder:Destroy()
 if ENV.Vigil and ENV.Vigil.Unload == unload then ENV.Vigil = nil end
