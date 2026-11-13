@@ -188,6 +188,15 @@ wsEquip = true,
 wsGroup = false,
 wsGroupDist = 30,
 wsGroupMax = 8,
+frFish = false,
+frReel = true,
+frReelDelay = 0.2,
+frFace = true,
+frSell = false,
+frSellCap = "1 in 100",
+frRods = false,
+frLines = false,
+frRewards = false,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -234,6 +243,8 @@ clickTp = false,
 showModules = true,
 hudTop = true,
 hudTaskbar = true,
+hudAutoHide = true,
+hud24h = true,
 theme = "Dark",
 accentColour = 1,
 menuKey = "RightShift",
@@ -266,7 +277,7 @@ if GAMES_ONLY then
 for _, key in ipairs({
 "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "spin", "hitmarker", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly", "noclip",
-"clickTp", "spyRecord", "antiAfk", "showModules", "perGame",
+"clickTp", "spyRecord", "showModules", "perGame",
 }) do
 Settings[key] = false
 end
@@ -424,7 +435,8 @@ settings = "rbxassetid://10734950309",
 search = "rbxassetid://10734943674",
 close = "rbxassetid://10747384394",
 eye = "rbxassetid://10723346959",
-games = "rbxassetid://10723395215",
+thisgame = "rbxassetid://10723395215",
+games = "rbxassetid://10723433811",
 spy = "rbxassetid://10723346959",
 discord = "rbxthumb://type=Asset&id=132364423955781&w=150&h=150",
 }
@@ -1012,16 +1024,18 @@ local tabs = {
 { id = "visuals", title = "Visuals", sub = "Changes how the world looks on your screen." },
 { id = "movement", title = "Movement", sub = "Changes how your character gets around." },
 { id = "players", title = "Players", sub = "Everyone in this server." },
-{ id = "games", title = "Games", sub = "Scripts made for specific games." },
+{ id = "thisgame", title = "This game", sub = "Nothing here is made for this game yet." },
+{ id = "games", title = "Games", sub = "Every game Vigil has a script for." },
 { id = "spy", title = "Remote spy", sub = "What this game sends to the server, and what comes back.", master = "spyRecord" },
-{ id = "settings", title = "Settings", sub = "Presets, appearance, keys and configs." },
+{ id = "settings", title = "Settings", sub = GAMES_ONLY and "Appearance, keys, server and configs." or "Presets, appearance, keys and configs." },
 }
 local tabById = {}
 for _, tab in ipairs(tabs) do tabById[tab.id] = tab end
-local GROUPS = GAMES_ONLY and { { "Games", { "games" } } } or {
+local GROUPS = GAMES_ONLY and { { "Hub", { "thisgame", "games" } } } or {
 { "Combat", { "aim", "trigger" } },
 { "Sight", { "esp", "visuals" } },
-{ "World", { "movement", "players", "games" } },
+{ "World", { "movement", "players" } },
+{ "Games", { "thisgame", "games" } },
 { "Tools", { "spy" } },
 }
 local NAV_TOP = GAMES_ONLY and 58 or 100 -- no search field in the games build
@@ -1130,7 +1144,7 @@ navY += 35
 end
 navY += 12
 end
-if not GAMES_ONLY then navItem("settings", 0) end
+navItem("settings", 0)
 local discordBtn = new("TextButton", {
 Size = UDim2.new(1, -20, 0, 34), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, ZIndex = 2, Parent = navScroll,
 }, { round(10) })
@@ -1233,7 +1247,7 @@ if q == "fov" then q = "field of view" end
 if q == "" then
 if UI.currentTab == "search" then
 UI.currentTab = nil
-selectTab(lastTab or (GAMES_ONLY and "games" or "aim"))
+selectTab(lastTab or (GAMES_ONLY and "thisgame" or "aim"))
 end
 return
 end
@@ -1556,8 +1570,8 @@ section(movementPage, "Other")
 switch(movementPage, "Noclip", "noclip")
 switch(movementPage, "Ctrl-click teleport", "clickTp")
 local settingsPage = page("settings")
+if not GAMES_ONLY then
 section(settingsPage, "Presets")
-do
 local buttons = {}
 for _, preset in ipairs(Presets) do
 table.insert(buttons, { preset[1], function() applyPreset(preset[1], preset[2]) end })
@@ -1565,9 +1579,11 @@ end
 buttonRow(settingsPage, "Combat preset", buttons)
 end
 section(settingsPage, "Appearance")
-switch(settingsPage, "Show active modules", "showModules")
+if not GAMES_ONLY then switch(settingsPage, "Show active modules", "showModules") end
 switch(settingsPage, "Top bar", "hudTop")
 switch(settingsPage, "Taskbar", "hudTaskbar")
+switch(settingsPage, "Hide taskbar until needed", "hudAutoHide")
+switch(settingsPage, "24-hour clock", "hud24h")
 switch(settingsPage, "Loading screen", "showLoader")
 segmented(settingsPage, "Theme", "theme", { "Dark", "Light" }, function() applyTheme() end)
 swatches(settingsPage, "Accent", "accentColour", Accents)
@@ -3662,7 +3678,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -3797,6 +3813,7 @@ return detail
 end
 do
 local gamesPage = page("games")
+local thisGamePage = page("thisgame")
 local function buildSwordForge(p)
 switch(p, "Auto train", "swordForgeTrain")
 local gainLabel = bind(new("TextLabel", {
@@ -5516,7 +5533,297 @@ end
 for npc in pairs(tags) do untag(npc) end
 end)
 end
+local function buildFishRng(p)
+local RunService = game:GetService("RunService")
+local Storage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local Network = Storage:WaitForChild("Network", 15)
+local function readout(label, text)
+return bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+}), "TextColor3", "muted")
+end
+local function every(key, seconds, job)
+task.spawn(function()
+while hookState.alive do
+if Settings[key] then pcall(job) end
+task.wait(seconds)
+end
+end)
+end
+local function comma(n)
+return (tostring(math.floor(tonumber(n) or 0)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+end
+local SELL_CAPS = { ["1 in 10"] = 10, ["1 in 100"] = 100, ["1 in 1k"] = 1000, ["1 in 10k"] = 10000 }
+section(p, "Auto fish")
+switch(p, "Auto fish", "frFish")
+switch(p, "Auto reel", "frReel")
+slider(p, "Reel delay", "frReelDelay", 0.1, 0.5, 0.05, function(v) return string.format("%.2fs", v) end)
+switch(p, "Turn to the water", "frFace")
+local statusLabel = readout("Status", "Off")
+local catchLabel = readout("Caught", "0 fish")
+local bestLabel = readout("Rarest", "None yet")
+note(p, "Casts through the game's own button with full luck, unlike the game's AUTO mode which halves it. Auto reel hits each bubble's key in the reel fight, under the 0.6s PERFECT window. Stand at the shore; Turn to the water faces you at the nearest water if the game can't find any ahead of you.")
+section(p, "Selling")
+switch(p, "Auto sell", "frSell")
+segmented(p, "Sell fish up to", "frSellCap", { "1 in 10", "1 in 100", "1 in 1k", "1 in 10k" })
+local sellLabel = readout("Coins", "0")
+note(p, "Uses the game's own Sell all every 20 seconds, so mutated fish and the fish you have equipped are always kept. Anything rarer than the cap is kept too.")
+section(p, "Shop")
+switch(p, "Auto buy rods", "frRods")
+switch(p, "Auto buy lines", "frLines")
+local shopLabel = readout("Gear", "")
+note(p, "Buys the next rod or line in the shop's order with coins once you can afford it, then equips it. Robux items are never touched.")
+section(p, "Rewards")
+switch(p, "Auto claim rewards", "frRewards")
+local rewardLabel = readout("Last claimed", "Nothing yet")
+note(p, "Claims the daily reward, playtime gifts and finished quests as soon as they're ready.")
+if not Network then
+statusLabel.Text = "Unavailable"
+return
+end
+local okFD, FD = pcall(function() return require(Storage:WaitForChild("FishDatabase", 10)) end)
+if not okFD or type(FD) ~= "table" then
+statusLabel.Text = "Unavailable"
+return
+end
+local Action, Reward, StateRemote = Network:WaitForChild("Action", 10), Network:WaitForChild("Reward", 10), Network:WaitForChild("State", 10)
+local state
+if StateRemote then
+connect(StateRemote.OnClientEvent, function(data)
+if type(data) == "table" and data.Coins ~= nil then state = data end
+end)
+end
+local lastAsk = 0
+local function refresh()
+if StateRemote and os.clock() - lastAsk > 2 then
+lastAsk = os.clock()
+StateRemote:FireServer()
+end
+end
+refresh()
+local castFn, targetWater
+local function findCast()
+if castFn or type(getgc) ~= "function" then return castFn end
+for _, fn in ipairs(getgc()) do
+if type(fn) == "function" and islclosure(fn) and debug.info(fn, "n") == "targetWater" then targetWater = fn break end
+end
+if not targetWater then return nil end
+for _, fn in ipairs(getgc()) do
+if type(fn) == "function" and islclosure(fn) and fn ~= targetWater and debug.info(fn, "a") == 1 then
+local ok, ups = pcall(debug.getupvalues, fn)
+if ok then
+for _, u in pairs(ups) do
+if u == targetWater then castFn = fn break end
+end
+end
+end
+if castFn then break end
+end
+return castFn
+end
+local function faceWater()
+local body = myRoot()
+if not body then return end
+local best, bestD
+for _, water in ipairs(CollectionService:GetTagged("FishableWater")) do
+if water:IsA("BasePart") then
+local loc = water.CFrame:PointToObjectSpace(body.Position)
+local spot = water.CFrame:PointToWorldSpace(Vector3.new(
+math.clamp(loc.X, -water.Size.X / 2 + 4, water.Size.X / 2 - 4), water.Size.Y / 2,
+math.clamp(loc.Z, -water.Size.Z / 2 + 4, water.Size.Z / 2 - 4)))
+local d = (Vector3.new(spot.X, 0, spot.Z) - Vector3.new(body.Position.X, 0, body.Position.Z)).Magnitude
+if d > 1 and (not bestD or d < bestD) then best, bestD = spot, d end
+end
+end
+if best and bestD < 70 then
+body.CFrame = CFrame.lookAt(body.Position, Vector3.new(best.X, body.Position.Y, best.Z))
+end
+return bestD
+end
+every("frFish", 0.4, function()
+local fn = findCast()
+if not fn then
+statusLabel.Text = "Cast not found"
+return
+end
+if LocalPlayer:GetAttribute("Reeling") then
+statusLabel.Text = "Reeling"
+return
+end
+if LocalPlayer:GetAttribute("InCutscene") then
+statusLabel.Text = "Catch scene"
+return
+end
+if LocalPlayer:GetAttribute("RodOut") then
+statusLabel.Text = "Waiting for a bite"
+return
+end
+local ok, spot = pcall(targetWater)
+if ok and not spot and Settings.frFace then
+local d = faceWater()
+ok, spot = pcall(targetWater)
+if not spot then
+statusLabel.Text = d and string.format("Water is %d studs away", d) or "No water nearby"
+return
+end
+end
+if not spot then
+statusLabel.Text = "Walk closer to the water"
+return
+end
+statusLabel.Text = "Casting"
+fn(false)
+end)
+task.spawn(function()
+while hookState.alive do
+if not Settings.frFish and statusLabel.Text ~= "Off" then statusLabel.Text = "Off" end
+task.wait(0.5)
+end
+end)
+local ctx
+local pressed = setmetatable({}, { __mode = "k" })
+local seenAt = setmetatable({}, { __mode = "k" })
+local function findContext()
+ctx = nil
+if type(getgc) ~= "function" then return nil end
+for _, t in ipairs(getgc(true)) do
+if type(t) == "table" and type(rawget(t, "InPool")) == "table" and type(rawget(t, "Unbind")) == "function"
+and typeof(rawget(t, "Field")) == "Instance" and t.Field.Parent and rawget(t, "Current") then
+ctx = t
+break
+end
+end
+return ctx
+end
+local nextScan = 0
+connect(LocalPlayer:GetAttributeChangedSignal("Reeling"), function() ctx = nil end) -- a new fight has a new context
+connect(RunService.Heartbeat, function()
+if not Settings.frReel or not LocalPlayer:GetAttribute("Reeling") then return end
+local c = ctx and ctx.Field and ctx.Field.Parent and ctx
+if not c then
+if os.clock() < nextScan then return end
+nextScan = os.clock() + 0.15
+c = findContext()
+if not c then return end
+end
+local current = rawget(c, "Current")
+if not current then return end
+for _, bubble in ipairs(c.Field:GetChildren()) do
+if bubble.Name == "Key" and bubble:IsA("GuiButton") and not pressed[bubble] then
+seenAt[bubble] = seenAt[bubble] or os.clock()
+if os.clock() - seenAt[bubble] >= Settings.frReelDelay then
+local letter = bubble:FindFirstChild("Letter")
+local code
+for _, k in ipairs(c.Pool or {}) do
+if letter and (k.Name:gsub("^Button", "")) == letter.Text then code = k break end
+end
+pressed[bubble] = true
+if code then pcall(current.Press, code) end
+return -- one press per frame, so the next bubble reads fresh state
+end
+end
+end
+end)
+local caught, rarest = 0, nil
+local Catch = Network:FindFirstChild("Catch")
+if Catch then
+connect(Catch.OnClientEvent, function(id, mutation)
+local fish = FD.ById[id]
+if not fish then return end
+caught += 1
+catchLabel.Text = string.format("%d fish", caught)
+if not rarest or (fish.Denominator or 0) > (rarest.Denominator or 0) then
+rarest = fish
+bestLabel.Text = string.format("%s, 1 in %s", fish.Name, comma(fish.Denominator))
+end
+if Settings.frRewards then refresh() end
+end)
+end
+local startCoins
+every("frSell", 20, function()
+local cap = math.min(SELL_CAPS[Settings.frSellCap] or 100, FD.GlobalAt or math.huge)
+Action:FireServer("SellAll", "", cap)
+task.wait(1)
+refresh()
+end)
+task.spawn(function()
+while hookState.alive do
+if state then
+startCoins = startCoins or state.Coins
+sellLabel.Text = string.format("%s (+%s)", comma(state.Coins), comma(state.Coins - startCoins))
+shopLabel.Text = string.format("%s, %s", tostring(state.Rod), tostring(state.Weight))
+end
+task.wait(1)
+end
+end)
+task.spawn(function()
+while hookState.alive do
+if Settings.frFish or Settings.frSell or Settings.frRods or Settings.frLines or Settings.frRewards then refresh() end
+task.wait(6)
+end
+end)
+local function buyNext(order, items, owned, equipped, buy, equip)
+if not state or type(order) ~= "table" then return end
+local have = state[owned] or {}
+local best
+for _, name in ipairs(order) do
+if have[name] then best = name end
+end
+for _, name in ipairs(order) do
+local item = items[name]
+if not have[name] and item and tonumber(item.Cost) then
+if state.Coins >= item.Cost then
+Action:FireServer(buy, name)
+task.wait(0.6)
+Action:FireServer(equip, name)
+toast("Bought " .. (item.Name or name))
+refresh()
+end
+break -- only ever the next one up
+end
+end
+if best and state[equipped] ~= best then Action:FireServer(equip, best) end
+end
+every("frRods", 5, function() buyNext(FD.RodOrder, FD.Rods, "OwnedRods", "Rod", "UnlockRod", "EquipRod") end)
+every("frLines", 5, function() buyNext(FD.WeightOrder, FD.Weights, "OwnedWeights", "Weight", "UnlockWeight", "EquipWeight") end)
+local giftsSent = {}
+every("frRewards", 5, function()
+if not state then return end
+local today = os.time() // 86400
+if state.Daily and (state.Daily.Day or 0) < today and not giftsSent.daily then
+giftsSent.daily = true
+Reward:FireServer("Daily")
+rewardLabel.Text = "Daily reward"
+task.delay(30, function() giftsSent.daily = nil end)
+end
+local played = LocalPlayer:GetAttribute("PlaySeconds") or state.PlaySeconds or 0
+for i, gift in ipairs(FD.PlayGifts or {}) do
+if played >= gift.At and not giftsSent[i] then
+giftsSent[i] = true
+Reward:FireServer("Gift", i)
+rewardLabel.Text = "Gift " .. i .. (gift.Label and (", " .. gift.Label) or "")
+end
+end
+local q = state.Quests
+if q and type(FD.QuestsFor) == "function" then
+local ok, list = pcall(FD.QuestsFor, q.Day)
+for _, quest in ipairs(ok and list or {}) do
+local progress = q.Progress and q.Progress[quest.Id] or 0
+if not (q.Claimed and q.Claimed[quest.Id]) and progress >= (quest.Goal or math.huge) and not giftsSent[quest.Id] then
+giftsSent[quest.Id] = true
+Action:FireServer("ClaimQuest", quest.Id)
+rewardLabel.Text = quest.Text or quest.Id
+task.delay(30, function() giftsSent[quest.Id] = nil end)
+end
+end
+end
+end)
+end
 local Games = {
+{ name = "FISH RNG", gameId = 10773682935, placeId = 97131604622053, build = buildFishRng },
 { name = "War Simulator", gameId = 1751760283, placeId = 5062619730, build = buildWarSimulator },
 { name = "Agaric.io", gameId = 10015248476, placeId = 139160315848670, build = buildAgaric },
 { name = "Cast a Magnet", gameId = 10770026560, placeId = 103265940798818, build = buildCastAMagnet },
@@ -5532,8 +5839,13 @@ if entry.gameId == game.GameId then current = entry end
 end
 UI.games, UI.currentGame = Games, current -- for the Vigil Hub loader
 if current then
-section(gamesPage, current.name)
-current.build(gamesPage)
+UI.tabById.thisgame.sub = current.name .. ". Loaded by itself because you're playing it."
+section(thisGamePage, current.name)
+current.build(thisGamePage)
+else
+section(thisGamePage, "Not supported yet")
+note(thisGamePage, "Vigil has no script for this game yet. Pick one from Games to join it, or ask for this one in the Discord.")
+buttonRow(thisGamePage, "Games", { { "See supported games", function() selectTab("games") end } })
 end
 local RELOAD = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/envidz/vigil/main/' .. (GAMES_ONLY and "vigil-games.lua" or "vigil.lua") .. '"))()'
 local function join(entry)
@@ -5544,9 +5856,7 @@ local ok = pcall(function() TeleportService:Teleport(entry.placeId, LocalPlayer)
 if not ok then toast("Couldn't join " .. entry.name) end
 end
 section(gamesPage, "Supported games")
-if not current then
-note(gamesPage, "This game isn't supported yet. Join one from the list, or check the Discord for new ones.")
-end
+note(gamesPage, "Join takes you to the game and Vigil loads again there by itself, where your executor allows it.")
 local search = inputRow(gamesPage, "Search", "Game name")
 local box = listBox(gamesPage)
 local function render()
@@ -6061,6 +6371,12 @@ end)
 end
 buttonRow(playersPage, "Server", { { "Rejoin", rejoin }, { "Server hop", serverHop } })
 note(playersPage, "Anti-AFK stops the 20 minute idle kick. Server hop joins a random other server of this game that has space.")
+if GAMES_ONLY then
+section(settingsPage, "Server")
+switch(settingsPage, "Anti-AFK", "antiAfk")
+buttonRow(settingsPage, "Server", { { "Rejoin", rejoin }, { "Server hop", serverHop } })
+note(settingsPage, "Anti-AFK stops the 20 minute idle kick, so auto farms keep going. Server hop joins another server of this game that has space.")
+end
 connect(LocalPlayer.Idled, function()
 if not Settings.antiAfk then return end
 pcall(function()
@@ -6466,13 +6782,19 @@ bind(frame:FindFirstChildOfClass("UIStroke"), "Color", "border")
 return frame
 end
 local function brandTile(parent, size, order)
-local tile = new("Frame", { Size = UDim2.fromOffset(size, size), BorderSizePixel = 0, LayoutOrder = order, Parent = parent }, { round(math.floor(size * 0.3)) })
-bind(tile, "BackgroundColor3", "accent")
-bind(new("TextLabel", {
-Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, FontFace = Tokens.fontStrong,
-TextSize = math.floor(size * 0.66), Text = "V", Parent = tile,
-}), "TextColor3", "onAccent")
-return tile
+local mark = new("Frame", { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, LayoutOrder = order, Parent = parent })
+local angle = math.rad(24)
+local length, thick = size * 0.95, math.max(2, size * 0.2)
+local bottom = Vector2.new(size / 2, size * 0.5 + length * math.cos(angle) / 2)
+for side = -1, 1, 2 do
+local centre = bottom + Vector2.new(side * math.sin(angle) * length / 2, -math.cos(angle) * length / 2)
+local arm = new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(centre.X, centre.Y), Size = UDim2.fromOffset(thick, length),
+Rotation = side * 24, BorderSizePixel = 0, BackgroundTransparency = side == 1 and 0.4 or 0, Parent = mark,
+}, { round("full") })
+bind(arm, "BackgroundColor3", "accent")
+end
+return mark
 end
 local topBar = shell({
 Name = "TopBar", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
@@ -6582,7 +6904,7 @@ else
 memValue.Text, memUnit.Text = tostring(math.floor(mb)), "MB"
 end
 playersValue.Text = string.format("%d/%d", #Players:GetPlayers(), Players.MaxPlayers)
-clockValue.Text = os.date("%H:%M")
+clockValue.Text = os.date(Settings.hud24h and "%H:%M" or "%I:%M %p")
 end)
 topBar.Position = UDim2.new(0.5, 0, 0, -40)
 tweenStyle(topBar, { Position = UDim2.new(0.5, 0, 0, 10) }, 0.6)
@@ -6636,7 +6958,7 @@ local ids = {}
 for _, group in ipairs(UI.groups) do
 for _, id in ipairs(group[2]) do table.insert(ids, id) end
 end
-if not GAMES_ONLY then table.insert(ids, "settings") end
+table.insert(ids, "settings")
 local items = {}
 for i, id in ipairs(ids) do
 local tab = UI.tabById[id]
@@ -6710,7 +7032,7 @@ local camera = workspace.CurrentCamera
 local mouse = UserInputService:GetMouseLocation()
 local nearBottom = camera and mouse.Y > camera.ViewportSize.Y - 80
 and math.abs(mouse.X - camera.ViewportSize.X / 2) < taskbar.AbsoluteSize.X / 2 + 120
-local want = (menuOpen and Holder.Visible) or nearBottom or (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
+local want = not Settings.hudAutoHide or (menuOpen and Holder.Visible) or nearBottom or (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
 if want ~= shown then
 shown = want
 if not want then hoverTip.Visible = false end
@@ -6719,7 +7041,7 @@ Enum.EasingStyle.Quint, want and Enum.EasingDirection.Out or Enum.EasingDirectio
 end
 end
 paintTaskbar()
-timeLabel.Text = os.date("%H:%M")
+timeLabel.Text = os.date(Settings.hud24h and "%H:%M" or "%I:%M %p")
 dateLabel.Text = os.date("%a %d %b")
 end)
 taskbar.Position = UDim2.new(0.5, 0, 1, 60)
@@ -7137,7 +7459,7 @@ highlightFolder:Destroy()
 if ENV.Vigil and ENV.Vigil.Unload == unload then ENV.Vigil = nil end
 end
 ENV.Vigil = { Unload = unload, Settings = Settings }
-selectTab(GAMES_ONLY and "games" or "aim")
+selectTab(GAMES_ONLY and "thisgame" or "aim")
 applyTheme()
 if Settings.showLoader then
 Holder.Visible = false
