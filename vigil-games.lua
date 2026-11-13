@@ -1596,7 +1596,7 @@ switch(settingsPage, "Separate settings per game", "perGame", function() save() 
 note(settingsPage, "When on, this game keeps its own settings and other games keep theirs.")
 section(settingsPage, "Script")
 local unload -- defined below
-actionButton(settingsPage, "Remove ESP and menu", "Unload", function() unload() end)
+actionButton(settingsPage, "Unload", "Unload", function() unload() end)
 local closeBtn = new("TextButton", {
 Size = UDim2.fromOffset(26, 26), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10),
 BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, ZIndex = 5, Parent = UI.main,

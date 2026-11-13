@@ -1805,7 +1805,7 @@ note(settingsPage, "When on, this game keeps its own settings and other games ke
 
 section(settingsPage, "Script")
 local unload -- defined below
-actionButton(settingsPage, "Remove ESP and menu", "Unload", function() unload() end)
+actionButton(settingsPage, "Unload", "Unload", function() unload() end)
 
 -- Close button, top right
 local closeBtn = new("TextButton", {
