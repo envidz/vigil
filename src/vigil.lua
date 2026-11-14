@@ -245,6 +245,9 @@ local Settings = {
 	dfPetStat = "Luck",
 	dfPondCash = false,
 	dfIce = false,
+	dfIceAuto = false,
+	dfIceBuyAuto = false,
+	dfIceStop = 5,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4255,7 +4258,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -6688,6 +6691,11 @@ local function buildDeepFishing(p)
 	switch(p, "Perfect ice drop", "dfIce")
 	local iceLabel = readout("Ring hits", "0 / 0")
 	note(p, "In the ice fishing hole, drops the bait the moment the swing crosses the middle of the ring, every swing, checked against the game's own landing rule before it lets go. Ring hits give the better catch odds; whether the fish then bites is still the game's roll. Works with the game's own Auto too, and drops before it would.")
+	switch(p, "Auto run pipeline", "dfIceAuto")
+	slider(p, "Claim at level", "dfIceStop", 3, 10, 1, function(v) return "Level " .. v end)
+	switch(p, "Buy the Auto perk with shards", "dfIceBuyAuto")
+	local iceRunLabel = readout("Run", "Not in the hole")
+	note(p, "Runs the hole start to finish on the game's own Auto perk: casts, uses each catch as bait to go deeper, claims at the level you pick, and casts again. If the fish gets away or Auto stops itself, it switches Auto back on and starts a new run. Needs the Auto perk (50 ice shards from the hole's upgrade board); turn on the buy switch to have it bought for you once you can afford it. Pair it with Perfect ice drop so every swing lands in the ring.")
 
 	-- the game's own controllers (require hands back the live, shared tables)
 	local F, TC, Sea, Daily, Gift
@@ -7213,8 +7221,56 @@ local function buildDeepFishing(p)
 				iceLabel.Text = iceRings .. " / " .. iceDrops
 			end)
 		end)
+		-- the full run loop, driven through the game's own Auto perk
+		local iceRuns, iceStoppedAt, iceLastMode = 0, 0, nil
+		every("dfIceAuto", 1, function()
+			local mode = Ice.Mode
+			local perks = Ice.Data and Ice.Data.Perks
+			if not perks or not mode or mode == "Walking" then
+				iceRunLabel.Text = "Not in the hole"
+				iceLastMode = mode
+				return
+			end
+			if not perks.AutoUnlocked then
+				local d = data()
+				local shards = d and tonumber(d.IceShards) or 0
+				local price = IceCfg.Upgrades.Auto.Price
+				if Settings.dfIceBuyAuto and shards >= price then
+					Ice:PressUpgrade("Auto")
+					iceRunLabel.Text = "Buying Auto"
+					toast("Bought the ice Auto perk (" .. price .. " shards)")
+					task.wait(3)
+				else
+					iceRunLabel.Text = string.format("Needs Auto perk (%d/%d shards)", shards, price)
+				end
+				return
+			end
+			local want = math.clamp(math.floor(Settings.dfIceStop or 5), IceCfg.Upgrades.Auto.StopMin, IceCfg.MaxLevel)
+			if perks.AutoStop ~= want and not Ice.AutoStopPending then
+				Ice:StepAutoStop(want - perks.AutoStop)
+			end
+			if mode == "Idle" and iceLastMode and iceLastMode ~= "Idle" then iceRuns += 1 end
+			iceLastMode = mode
+			if not Ice.AutoOn then
+				-- Auto turned itself off (a claim kept failing) or was never on: give it a moment, then restart
+				if iceStoppedAt == 0 then iceStoppedAt = os.clock() end
+				if os.clock() - iceStoppedAt >= 4 then
+					iceStoppedAt = 0
+					Ice:SetAuto(true)
+				end
+			else
+				iceStoppedAt = 0
+			end
+			local rv = Ice.RunView
+			if rv and rv.Level then
+				iceRunLabel.Text = string.format("Level %d/%d %s, %d runs", rv.Level, want, tostring(rv.Name or ""), iceRuns)
+			else
+				iceRunLabel.Text = mode .. ", " .. iceRuns .. " runs"
+			end
+		end)
 	else
 		iceLabel.Text = "Unavailable"
+		iceRunLabel.Text = "Unavailable"
 	end
 
 	-- chests and potions, as if used from the hotbar
