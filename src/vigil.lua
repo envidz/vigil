@@ -6654,6 +6654,40 @@ local function buildDeepFishing(p)
 	local rewardLabel = readout("Last claimed", "Nothing yet")
 	switch(p, "Auto claim achievements", "dfAchieve")
 	note(p, "Claims playtime gifts and daily rewards as soon as the game says they're ready, and every achievement tier you've finished.")
+	local dfCodeBusy, dfCodeHits, dfCodeHooked = false, 0, false
+	buttonRow(p, "Codes", { { "Redeem all", function()
+		if dfCodeBusy then return toast("Already redeeming codes") end
+		local okF, Fish = pcall(function() return require(LocalPlayer.PlayerScripts.Client.Controllers.Fishing) end)
+		if not okF or not Fish or not Fish.Events then return toast("Still loading. Try again in a moment.") end
+		dfCodeBusy, dfCodeHits = true, 0
+		if not dfCodeHooked then
+			dfCodeHooked = true
+			pcall(function()
+				Fish.Events.Client("Codes"):Connect(function(result)
+					if dfCodeBusy and result == "Redeemed" then dfCodeHits += 1 end
+				end)
+			end)
+		end
+		toast("Redeeming codes")
+		task.spawn(function()
+			-- public codes as of 2026-11-14; the server's list is hidden, so dead ones just come back expired or used
+			local codes = {
+				"update14", "yinyang", "ice", "divine", "verdant", "update13", "update12", "update11",
+				"trading", "harpoon", "halloween", "pets", "sunkencrown", "boats", "volcano",
+				"keys", "kraken", "frostmere", "gifting", "mutations", "bigfish", "pond", "skins",
+				"thanksforplaying", "release",
+			}
+			for _, code in ipairs(codes) do
+				if not hookState.alive then break end
+				pcall(function() Fish.Events.Client("Codes"):Fire(true, code) end)
+				task.wait(1.2) -- the server turns away codes sent less than a second apart
+			end
+			task.wait(1)
+			dfCodeBusy = false
+			toast(dfCodeHits > 0 and (dfCodeHits .. " new codes redeemed") or "No new codes to redeem")
+		end)
+	end } })
+	note(p, "Tries every public code the game has put out, one a second through the game's own code box. Codes you've already used or that have run out are simply turned away, and the game shows its usual message for each.")
 
 	section(p, "Upgrades")
 	switch(p, "Auto upgrade", "dfUpgrade")
