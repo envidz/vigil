@@ -204,6 +204,18 @@ dfSell = false,
 dfSellUnder = "Everything",
 dfRods = false,
 dfRewards = false,
+dfUpgrade = false,
+dfUpCapacity = true,
+dfUpStrength = true,
+dfUpWeight = true,
+dfUpBounce = true,
+dfUpOrder = "Cheapest first",
+dfAchieve = false,
+dfBaitUse = false,
+dfBaitBuy = false,
+dfBaitSpend = 20,
+dfChests = false,
+dfPotions = false,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -3685,7 +3697,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5872,7 +5884,28 @@ note(p, "Buys the cheapest regular rod with more luck than your best one once yo
 section(p, "Rewards")
 switch(p, "Auto claim rewards", "dfRewards")
 local rewardLabel = readout("Last claimed", "Nothing yet")
-note(p, "Claims playtime gifts and daily rewards as soon as the game says they're ready.")
+switch(p, "Auto claim achievements", "dfAchieve")
+note(p, "Claims playtime gifts and daily rewards as soon as the game says they're ready, and every achievement tier you've finished.")
+section(p, "Upgrades")
+switch(p, "Auto upgrade", "dfUpgrade")
+switch(p, "Capacity", "dfUpCapacity")
+switch(p, "Strength", "dfUpStrength")
+switch(p, "Weight", "dfUpWeight")
+switch(p, "Bounce", "dfUpBounce")
+segmented(p, "Order", "dfUpOrder", { "Cheapest first", "Top to bottom" })
+local upgradeLabel = readout("Levels", "")
+note(p, "Buys the upgrades you've ticked with cash through the game's own upgrade shop, one level at a time, until each is maxed. Cheapest first spreads your cash; Top to bottom finishes Capacity before moving on. Robux tiers are never touched.")
+section(p, "Bait")
+switch(p, "Auto use best bait", "dfBaitUse")
+switch(p, "Auto buy bait at the bait stand", "dfBaitBuy")
+slider(p, "Spend up to", "dfBaitSpend", 5, 100, 5, function(v) return string.format("%d%% of cash", v) end)
+local baitLabel = readout("Loaded", "None")
+note(p, "Use: when your line has no bait left, loads the best bait in your backpack (most luck). Buy: while you stand at the bait stand, buys the highest-luck bait whose price fits in the share of cash you set, 10 at a time, and stops once you hold 20.")
+section(p, "Items")
+switch(p, "Auto open chests", "dfChests")
+switch(p, "Auto drink potions", "dfPotions")
+local itemLabel = readout("Last used", "Nothing yet")
+note(p, "Opens chests in your backpack and drinks potions whose effect isn't already running, the same as using them from your hotbar. Streak-restore potions are left alone. Potions are worth saving for a big session, so leave this off if you'd rather pick the moment.")
 local F, TC, Sea, Daily, Gift
 local ok = pcall(function()
 local ctl = LocalPlayer:WaitForChild("PlayerScripts", 20):WaitForChild("Client", 20):WaitForChild("Controllers", 20)
@@ -6101,6 +6134,142 @@ local equipped = Rod.Items[d.RodEquipped or ""]
 if bestName and d.RodEquipped ~= bestName and (equipped == nil or (equipped.Luck or 0) < bestLuck)
 and not TC.Active and not F.Charging and not EG.EquipBlockedHere(d, bestName) then
 F.Events.Client("RodShop"):Fire(true, "Equip", bestName)
+end
+end)
+every("dfUpgrade", 1.5, function()
+local d = data()
+if not d then return end
+local U, Candy = F.Config.UpgradesConfig, F.Config.CandyConfig
+if Candy.CurrencyHere(d) == Candy.Currency then return end
+local key = U.KeyForData(d)
+local pick, pickPrice, levels, blocked = nil, nil, {}, false
+local inOrder = Settings.dfUpOrder == "Top to bottom"
+for _, name in ipairs(U.Order or { "Capacity", "Strength", "Weight", "Bounce" }) do
+name = type(name) == "table" and (name.Name or name.Key) or name
+local lvl, max = U.LevelOf(d, name, key) or 0, U.MaxLevelFor(name, key) or 0
+table.insert(levels, string.sub(name, 1, 3) .. " " .. lvl .. "/" .. max)
+if Settings["dfUp" .. name] and lvl < max and not blocked then
+local price = U.GetPrice(name, lvl, key)
+if price and price <= (d.Cash or 0) then
+if inOrder then
+pick, pickPrice, blocked = name, price, true
+elseif not pickPrice or price < pickPrice then
+pick, pickPrice = name, price
+end
+elseif inOrder then
+blocked = true -- save up for this one, don't skip ahead
+end
+end
+end
+upgradeLabel.Text = table.concat(levels, "  ")
+if pick then
+F.Events.Client("Upgrades"):Fire(true, "Buy", pick)
+toast("Upgraded " .. pick .. " ($" .. comma(pickPrice) .. ")")
+end
+end)
+every("dfAchieve", 4, function()
+local d = data()
+local A = F.Config.AchievementConfig
+if not d then return end
+for _, ach in ipairs(A.Order or {}) do
+if A.CanClaim(ach, d) then
+F.Events.Client("Achievement"):Fire(true, "Claim", ach.Key)
+rewardLabel.Text = tostring(ach.DisplayName or ach.Key)
+task.wait(1.5)
+d = data() or d
+end
+end
+end)
+local function bagItems(kind)
+local d, out = data(), {}
+for guid, item in pairs(d and d.Inventory or {}) do
+if type(item) == "table" and item.Type == kind then table.insert(out, { guid = guid, item = item }) end
+end
+return out
+end
+local function baitLuck(name)
+local b = F.Content.Item.Bait.Items[name]
+return b and b.Luck or 0
+end
+local function loadedBait()
+local d, n, name = data(), 0, nil
+for k, v in pairs(d and d.ActiveBaits or {}) do
+if type(v) == "number" and v > 0 then n += v name = k end
+end
+return n, name
+end
+every("dfBaitUse", 2, function()
+local n, name = loadedBait()
+baitLabel.Text = n > 0 and (tostring(name) .. " x" .. n) or "None"
+if n > 0 or TC.Active or F.Charging then return end
+local best
+for _, e in ipairs(bagItems("Bait")) do
+if not best or baitLuck(e.item.Name) > baitLuck(best.item.Name) then best = e end
+end
+if best then
+F.Events.Client("ConsumeBait"):Fire(true, best.guid)
+itemLabel.Text = tostring(best.item.Name)
+task.wait(1)
+end
+end)
+local function nearBaitStand()
+local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+local worlds = workspace:FindFirstChild("World")
+if not root or not worlds then return false end
+for _, w in ipairs(worlds:GetChildren()) do
+local stand = w:FindFirstChild("Map") and w.Map:FindFirstChild("NPC_Baits")
+if stand then
+local okP, pos = pcall(function() return stand:GetPivot().Position end)
+if okP and (pos - root.Position).Magnitude <= 14 then return true end
+end
+end
+return false
+end
+every("dfBaitBuy", 4, function()
+local d = data()
+if not d or not nearBaitStand() then return end
+local EG = F.Config.EventGearConfig
+local setHere = EG.SetHere(d)
+if EG.CurrencyOf(setHere) ~= "Cash" then return end
+local held = loadedBait()
+for _, e in ipairs(bagItems("Bait")) do held += (e.item.Data and tonumber(e.item.Data.Amount)) or 1 end
+if held >= 20 then return end
+local budget = (d.Cash or 0) * (Settings.dfBaitSpend or 20) / 100
+local pick, count
+for _, b in pairs(F.Content.Item.Bait:GetCollection()) do
+local name, price = b.Name, tonumber(b.Price)
+if price and price > 0 and (b.Luck or 0) > 0 and EG.SetOf(name) == setHere then
+local n = price * 10 <= budget and 10 or (price <= budget and 1 or 0)
+if n > 0 and (not pick or (b.Luck or 0) > baitLuck(pick)) then pick, count = name, n end
+end
+end
+if pick then
+F.Events.Client("BaitShop"):Fire(true, "Buy", pick, count)
+toast("Bought " .. count .. "x " .. pick)
+task.wait(3)
+end
+end)
+every("dfChests", 2, function()
+if TC.Active or F.Charging then return end
+for _, e in ipairs(bagItems("Chest")) do
+F.Events.Client("FishingObject"):Fire(true, "Open", e.guid)
+itemLabel.Text = tostring(e.item.Name)
+task.wait(2.5)
+end
+end)
+every("dfPotions", 5, function()
+local d = data()
+local PC = F.Config.PotionConfig
+if not d or PC.IsPaused(d) or (PC.PausedWorlds and PC.PausedWorlds[d.World]) then return end
+for _, e in ipairs(bagItems("Potion")) do
+local potion = F.Content.Item.Potion:Get(e.item.Name, true)
+local key = PC.KeyForItem(e.item.Name)
+if potion and potion.Effect ~= "RestoreStreak" and key and not PC.IsActive(d, key) then
+F.Events.Client("Potion"):Fire(true, "Drink", e.guid)
+itemLabel.Text = tostring(e.item.Name)
+task.wait(2)
+d = data() or d
+end
 end
 end)
 every("dfRewards", 5, function()
