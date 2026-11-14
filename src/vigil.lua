@@ -6631,12 +6631,12 @@ local function buildDeepFishing(p)
 
 	section(p, "Auto fish")
 	switch(p, "Auto fish", "dfFish")
-	switch(p, "Aim at the rarest fish", "dfAim")
+	switch(p, "Aim at the most valuable fish", "dfAim")
 	switch(p, "Auto fight", "dfFight")
 	local statusLabel = readout("Status", "Off")
 	local catchLabel = readout("Caught", "0 fish")
-	local bestLabel = readout("Rarest", "None yet")
-	note(p, "Charges through the game's own throw and lets go when the moving bar sits in the PERFECT zone, every time (the game's own auto mode picks a random spot). While the bait sinks it steers toward the rarest fish in reach, and in the catch fight it clicks at the game's auto-fight pace. Auto fight also helps when you fish by hand. Stand in a fishing spot with your rod; it equips your rod if you're holding nothing.")
+	local bestLabel = readout("Best catch", "None yet")
+	note(p, "Charges through the game's own throw and lets go on the first pass through the PERFECT zone, every time (the game's own auto mode picks a random spot), and casts again the instant the last catch is in. While the bait sinks it steers toward the most valuable fish in reach (the game's own coin value for that fish, size included), switching if a better one swims into reach, and in the catch fight it clicks at the game's auto-fight pace. Auto fight also helps when you fish by hand. Stand in a fishing spot with your rod; it equips your rod if you're holding nothing.")
 
 	section(p, "Selling")
 	switch(p, "Auto sell at the merchant", "dfSell")
@@ -6731,6 +6731,12 @@ local function buildDeepFishing(p)
 		local item = F.Content.Item.Fish.Items[name]
 		return item and item.Rarity and F.Config.RarityConfig.GetOrder(item.Rarity) or -1, item and item.Rarity
 	end
+	local function fishValue(fish)
+		local v = tonumber(fish.value)
+		if v then return v end
+		local item = F.Content.Item.Fish.Items[fish.name]
+		return item and tonumber(item.SellPrice) or 0
+	end
 	local function minigame()
 		return TC.Sub and TC.Sub.CatchMinigame
 	end
@@ -6740,7 +6746,7 @@ local function buildDeepFishing(p)
 	end
 
 	-- catch tally: fish the game marks caught on our own throws
-	local caught, bestOrder = 0, -1
+	local caught, bestValue = 0, -1
 	local counted = setmetatable({}, { __mode = "k" })
 	local function tally()
 		local school = TC.Sub and TC.Sub.FishSchool
@@ -6749,10 +6755,11 @@ local function buildDeepFishing(p)
 			if type(fish) == "table" and fish.caught and not fish.escaped and not counted[fish] then
 				counted[fish] = true
 				caught += 1
-				local order, rarity = rarityOrder(fish.name)
-				if order > bestOrder then
-					bestOrder = order
-					bestLabel.Text = (rarity or "?") .. ", " .. tostring(fish.name)
+				local value = fishValue(fish)
+				if value > bestValue then
+					bestValue = value
+					local _, rarity = rarityOrder(fish.name)
+					bestLabel.Text = string.format("%s, %s ($%s)", rarity or fish.rarity or "?", tostring(fish.name), comma(math.floor(value)))
 				end
 			end
 		end
@@ -6770,7 +6777,7 @@ local function buildDeepFishing(p)
 		driving = true
 		local t0 = os.clock()
 		while F.Charging and hookState.alive and os.clock() - t0 < 8 do
-			if os.clock() - t0 > 0.4 and perfectAt(F.HookT or 0) then
+			if os.clock() - t0 > 0.05 and perfectAt(F.HookT or 0) then
 				F:StopHook()
 				return
 			end
@@ -6802,7 +6809,7 @@ local function buildDeepFishing(p)
 				if TC.Active or F.Charging then
 					if driving then tally() end
 					statusLabel.Text = fighting() and "Fighting" or (TC.ReelRequested and "Reeling in" or "Fishing")
-					nextCast = os.clock() + 1.3 + math.random() * 0.9
+					nextCast = 0
 					return
 				end
 				driving = false
@@ -6829,7 +6836,7 @@ local function buildDeepFishing(p)
 					castPerfect()
 				end
 			end)
-			task.wait(0.2)
+			task.wait()
 		end
 	end)
 
@@ -6846,16 +6853,16 @@ local function buildDeepFishing(p)
 		local school = TC.Sub and TC.Sub.FishSchool
 		local fishes, hang, landing = school and school.Fish, TC.HangPoint, TC.ActiveLanding
 		if type(fishes) ~= "table" or not hang or not landing then return end
-		if not valid(target, hang.Y) then
-			target = nil
-			local bestO, bestD = -math.huge, math.huge
-			for _, fish in ipairs(fishes) do
-				if valid(fish, hang.Y) then
-					local order = fish.special and 1e6 or rarityOrder(fish.name)
-					local off = ((fish.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
+		if not valid(target, hang.Y) then target = nil end
+		local bestV, bestD = target and fishValue(target) or -math.huge, math.huge
+		for _, fish in ipairs(fishes) do
+			if fish ~= target and valid(fish, hang.Y) then
+				local off = ((fish.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
+				if math.abs(off) <= 50 then -- only fish the bait can actually be steered to
+					local value = fishValue(fish)
 					local dist = math.abs(off - (TC.AimOffset or 0))
-					if order > bestO or (order == bestO and dist < bestD) then
-						target, bestO, bestD = fish, order, dist
+					if value > bestV or (value == bestV and dist < bestD) then
+						target, bestV, bestD = fish, value, dist
 					end
 				end
 			end
