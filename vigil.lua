@@ -220,6 +220,7 @@ dfEggs = false,
 dfPets = false,
 dfPetStat = "Luck",
 dfPondCash = false,
+dfIce = false,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -3701,7 +3702,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -5921,6 +5922,10 @@ note(p, "While you're in your own pond, walks to each hatchery slot at normal sp
 switch(p, "Auto collect pond cash", "dfPondCash")
 local pondLabel = readout("Pond cash", "$0")
 note(p, "Collects your pond's earnings, the same as stepping on the collect pad, whenever you're home in your pond and there's cash waiting.")
+section(p, "Ice fishing")
+switch(p, "Perfect ice drop", "dfIce")
+local iceLabel = readout("Ring hits", "0 / 0")
+note(p, "In the ice fishing hole, drops the bait the moment the swing crosses the middle of the ring, every swing, checked against the game's own landing rule before it lets go. Ring hits give the better catch odds; whether the fish then bites is still the game's roll. Works with the game's own Auto too, and drops before it would.")
 local F, TC, Sea, Daily, Gift
 local ok = pcall(function()
 local ctl = LocalPlayer:WaitForChild("PlayerScripts", 20):WaitForChild("Client", 20):WaitForChild("Controllers", 20)
@@ -6391,6 +6396,36 @@ F.Events.Client("Pond"):Fire(true, "Collect")
 task.wait(5)
 end
 end)
+local Ice, IceCfg
+pcall(function()
+IceCfg = require(Storage.Shared.Config.IceFishingConfig)
+local misc = LocalPlayer.PlayerScripts.Client.Controllers.Islands.IslandMisc
+Ice = require(misc:WaitForChild("IceFishing", 10))
+end)
+local iceDrops, iceRings, iceSwing = 0, 0, nil
+if Ice and IceCfg then
+connect(RunService.Heartbeat, function()
+if not Settings.dfIce or Ice.Mode ~= "Swing" or not Ice.SwingAt or not Ice.SwingLevel then return end
+if iceSwing == Ice.SwingAt then return end -- already dropped this swing
+local e = os.clock() - Ice.SwingAt
+if e < IceCfg.Drop.SwingIn then return end
+local half = IceCfg.SwingTime(Ice.SwingLevel) / 2
+local n = math.floor(e / half)
+local since = e - n * half
+if n < 1 or since < 0.03 or since > 0.07 then return end
+local okL, landed = pcall(IceCfg.Landed, e, Ice.SwingLevel, Ice.StageIndex or 1, Ice.SwingDir or 1)
+if not (okL and landed) then return end
+iceSwing = Ice.SwingAt
+iceDrops += 1
+Ice:Tap()
+task.delay(2, function()
+if Ice.RingHit then iceRings += 1 end
+iceLabel.Text = iceRings .. " / " .. iceDrops
+end)
+end)
+else
+iceLabel.Text = "Unavailable"
+end
 every("dfChests", 2, function()
 if TC.Active or F.Charging then return end
 for _, e in ipairs(bagItems("Chest")) do
