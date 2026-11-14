@@ -240,6 +240,10 @@ local Settings = {
 	dfBaitSpend = 20,
 	dfChests = false,
 	dfPotions = false,
+	dfEggs = false,
+	dfPets = false,
+	dfPetStat = "Luck",
+	dfPondCash = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4250,7 +4254,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -6667,6 +6671,18 @@ local function buildDeepFishing(p)
 	local itemLabel = readout("Last used", "Nothing yet")
 	note(p, "Opens chests in your backpack and drinks potions whose effect isn't already running, the same as using them from your hotbar. Streak-restore potions are left alone. Potions are worth saving for a big session, so leave this off if you'd rather pick the moment.")
 
+	section(p, "Pets and pond")
+	switch(p, "Auto equip best pets", "dfPets")
+	segmented(p, "Best for", "dfPetStat", { "Luck", "Coins", "XP", "Mutation", "Treasure" })
+	local petLabel = readout("Equipped", "None")
+	note(p, "Ranks every pet you own by the game's own boost formula (level, stars and shiny included) for the stat you pick, and keeps the top ones equipped, as many as you have slots. Pets you've placed in your pond are left there. Only swaps while you're away from your pond, like the pet menu.")
+	switch(p, "Auto place and hatch eggs", "dfEggs")
+	local eggLabel = readout("Hatchery", "Go to your pond")
+	note(p, "While you're in your own pond, walks to each hatchery slot at normal speed: puts an egg from your backpack in any empty slot and hatches the ones that are ready, through the slots' own prompts. Robux skips are never used. Turn Auto fish off while this runs, since it walks you around.")
+	switch(p, "Auto collect pond cash", "dfPondCash")
+	local pondLabel = readout("Pond cash", "$0")
+	note(p, "Collects your pond's earnings, the same as stepping on the collect pad, whenever you're home in your pond and there's cash waiting.")
+
 	-- the game's own controllers (require hands back the live, shared tables)
 	local F, TC, Sea, Daily, Gift
 	local ok = pcall(function()
@@ -7029,6 +7045,137 @@ local function buildDeepFishing(p)
 			F.Events.Client("BaitShop"):Fire(true, "Buy", pick, count)
 			toast("Bought " .. count .. "x " .. pick)
 			task.wait(3)
+		end
+	end)
+
+	-- pets and pond
+	local PetBoost, Clock
+	pcall(function() PetBoost = require(Storage.Shared.Config.PetBoostConfig) end)
+	pcall(function() Clock = require(Storage.Shared.Modules.Time).Exact end)
+	local function atHome()
+		local okH, owner = pcall(function() return F.Controllers.Islands:CurrentPond() end)
+		return okH and owner == LocalPlayer.UserId
+	end
+	every("dfPets", 4, function()
+		local d = data()
+		if not d or not PetBoost or atHome() then return end
+		local PC, stat = F.Config.PetConfig, Settings.dfPetStat or "Luck"
+		local pond = {}
+		for k, v in pairs(type(d.PondPets) == "table" and d.PondPets or {}) do
+			pond[k] = true
+			if type(v) == "string" then pond[v] = true end
+		end
+		local list = {}
+		for guid, item in pairs(d.Inventory or {}) do
+			if type(item) == "table" and item.Type == "Pet" and not pond[guid] then
+				local shiny = type(item.Data) == "table" and item.Data.Shiny == true
+				local okB, boost = pcall(PetBoost.Get, item.Name, shiny, PC.LevelOf(item), PC.StarsOf(item))
+				boost = okB and boost or {}
+				local other = 0
+				for k, v in pairs(boost) do
+					if k ~= stat and type(v) == "number" then other += (k == "Golden" or k == "DoubleCatch") and v / 100 or (v - 1) end
+				end
+				table.insert(list, { guid = guid, name = item.Name, score = (tonumber(boost[stat]) or 1) * 1000 + other })
+			end
+		end
+		table.sort(list, function(a, b) return a.score > b.score end)
+		local want, names = {}, {}
+		for i = 1, math.min(PC.MaxEquippedFor(d), #list) do
+			want[list[i].guid] = true
+			table.insert(names, list[i].name)
+		end
+		petLabel.Text = #names > 0 and table.concat(names, ", ") or "None"
+		local equipped = type(d.EquippedPets) == "table" and d.EquippedPets or {}
+		for guid in pairs(equipped) do
+			if not want[guid] and d.Inventory[guid] then
+				F.Events.Client("EquipPet"):Fire(true, "Unequip", guid)
+				return
+			end
+		end
+		for guid in pairs(want) do
+			if equipped[guid] == nil then
+				F.Events.Client("EquipPet"):Fire(true, "Equip", guid)
+				return
+			end
+		end
+	end)
+
+	local function walkTo(pos)
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not hum or not root then return false end
+		local t0 = os.clock()
+		while (root.Position - pos).Magnitude > 5 and os.clock() - t0 < 12 and hookState.alive and Settings.dfEggs do
+			hum:MoveTo(pos)
+			task.wait(0.25)
+		end
+		return (root.Position - pos).Magnitude <= 7.5
+	end
+	local function eggTool()
+		local d = data()
+		local inv = d and d.Inventory or {}
+		local held = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+		if held and type(inv[held.Name]) == "table" and inv[held.Name].Type == "Egg" then return held end
+		local bp = LocalPlayer:FindFirstChild("Backpack")
+		for _, tool in ipairs(bp and bp:GetChildren() or {}) do
+			if tool:IsA("Tool") and type(inv[tool.Name]) == "table" and inv[tool.Name].Type == "Egg" then return tool end
+		end
+		return nil
+	end
+	every("dfEggs", 3, function()
+		local H = F.Controllers.Pets and F.Controllers.Pets.Hatchery
+		if not H or not atHome() then
+			eggLabel.Text = "Go to your pond"
+			return
+		end
+		if TC.Active or F.Charging then return end
+		local d = data()
+		local placed = d and type(d.PlacedEggs) == "table" and d.PlacedEggs or {}
+		local now = Clock and Clock() or workspace:GetServerTimeNow()
+		local growing, ready = 0, 0
+		for _, egg in pairs(placed) do
+			if type(egg) == "table" then
+				if now >= (tonumber(egg.ReadyAt) or math.huge) then ready += 1 else growing += 1 end
+			end
+		end
+		eggLabel.Text = string.format("%d growing, %d ready", growing, ready)
+		for slot, prompt in pairs(H.Prompts or {}) do
+			if not Settings.dfEggs or not atHome() then return end
+			local anchor = prompt.Anchor
+			local egg = placed[slot]
+			if anchor and anchor.Parent then
+				if type(egg) == "table" and now >= (tonumber(egg.ReadyAt) or math.huge) then
+					if walkTo(anchor.Position) then
+						H:Request("Hatch", slot)
+						eggLabel.Text = "Hatching"
+						task.wait(9) -- let the game's reveal play out
+					end
+				elseif egg == nil then
+					local tool = eggTool()
+					local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+					if tool and hum then
+						if tool.Parent ~= LocalPlayer.Character then hum:EquipTool(tool) task.wait(0.4) end
+						if walkTo(anchor.Position) then
+							H:Request("Place", slot)
+							eggLabel.Text = "Placed an egg"
+							task.wait(2)
+						end
+					end
+				end
+			end
+			d = data() or d
+			placed = d and type(d.PlacedEggs) == "table" and d.PlacedEggs or placed
+		end
+	end)
+
+	every("dfPondCash", 5, function()
+		local d = data()
+		local pending = d and type(d.Pond) == "table" and tonumber(d.Pond.PendingIncome) or 0
+		pondLabel.Text = "$" .. comma(pending)
+		if pending > 0 and atHome() then
+			F.Events.Client("Pond"):Fire(true, "Collect")
+			task.wait(5)
 		end
 	end)
 
