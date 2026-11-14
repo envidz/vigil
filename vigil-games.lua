@@ -6439,7 +6439,36 @@ iceLabel.Text = iceRings .. " / " .. iceDrops
 end)
 end)
 local iceRuns, iceStoppedAt, iceLastMode = 0, 0, nil
-every("dfIceAuto", 1, function()
+local function iceWant()
+return Settings.dfIceGoal == "Rarest fish" and IceCfg.MaxLevel
+or math.clamp(math.floor(Settings.dfIceStop or 5), IceCfg.Upgrades.Auto.StopMin, IceCfg.MaxLevel)
+end
+local function iceTopStage()
+local top = Ice.StageIndex or 1
+if not Settings.dfIceTopStage or not Ice.Data or not Ice.Data.Unlocked then return top end
+for i = top + 1, IceCfg.ReleasedStages do
+local st = IceCfg.Stages[i]
+if st and Ice.Data.Unlocked[st.Key] then top = i end
+end
+return top
+end
+local iceActedAt, iceFishAt = nil, 0
+connect(RunService.Heartbeat, function()
+if not Settings.dfIceAuto or not Ice.AutoOn then return end
+local mode = Ice.Mode
+if mode ~= "Idle" and mode ~= "Decide" then return end
+local perks = Ice.Data and Ice.Data.Perks
+if not perks or not perks.AutoUnlocked or iceActedAt == Ice.ModeAt then return end
+if mode == "Decide" and (perks.AutoStop ~= iceWant() or Ice.AutoStopPending) then return end -- claim level still syncing
+if mode == "Idle" then
+if iceTopStage() > (Ice.StageIndex or 1) then return end -- the stage hop goes first
+if os.clock() - iceFishAt < (IceCfg.MinStartGap or 1.8) + 0.05 then return end -- the server's gap between casts
+iceFishAt = os.clock()
+end
+iceActedAt = Ice.ModeAt
+pcall(Ice.AutoAct, Ice)
+end)
+every("dfIceAuto", 0.1, function()
 local mode = Ice.Mode
 local perks = Ice.Data and Ice.Data.Perks
 if not perks or not mode or mode == "Walking" then
@@ -6461,8 +6490,7 @@ iceRunLabel.Text = string.format("Needs Auto perk (%d/%d shards)", shards, price
 end
 return
 end
-local want = Settings.dfIceGoal == "Rarest fish" and IceCfg.MaxLevel
-or math.clamp(math.floor(Settings.dfIceStop or 5), IceCfg.Upgrades.Auto.StopMin, IceCfg.MaxLevel)
+local want = iceWant()
 if Settings.dfIceUpgrades and os.clock() - (Ice.BuyAt or 0) > 3 then
 local d = data()
 local shards = d and tonumber(d.IceShards) or 0
@@ -6477,12 +6505,8 @@ Ice:PressUpgrade(pick)
 toast("Ice " .. pick .. " upgrade (" .. comma(pickPrice) .. " shards)")
 end
 end
-if Settings.dfIceTopStage and mode == "Idle" and Ice.StageIndex and Ice.Data.Unlocked then
-local top = Ice.StageIndex
-for i = Ice.StageIndex + 1, IceCfg.ReleasedStages do
-local st = IceCfg.Stages[i]
-if st and Ice.Data.Unlocked[st.Key] then top = i end
-end
+if mode == "Idle" and Ice.StageIndex then
+local top = iceTopStage()
 if top > Ice.StageIndex then
 local from = Ice.StageIndex
 if Ice.AutoOn then Ice:SetAuto(false) end
@@ -6501,7 +6525,7 @@ if mode == "Idle" and iceLastMode and iceLastMode ~= "Idle" then iceRuns += 1 en
 iceLastMode = mode
 if not Ice.AutoOn then
 if iceStoppedAt == 0 then iceStoppedAt = os.clock() end
-if os.clock() - iceStoppedAt >= 4 then
+if (Ice.AutoClaims or 0) <= 3 or os.clock() - iceStoppedAt >= 3 then
 iceStoppedAt = 0
 Ice:SetAuto(true)
 end
