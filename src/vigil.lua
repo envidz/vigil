@@ -6631,12 +6631,12 @@ local function buildDeepFishing(p)
 
 	section(p, "Auto fish")
 	switch(p, "Auto fish", "dfFish")
-	switch(p, "Aim at the most valuable fish", "dfAim")
+	switch(p, "Aim to fill capacity, most valuable", "dfAim")
 	switch(p, "Auto fight", "dfFight")
 	local statusLabel = readout("Status", "Off")
 	local catchLabel = readout("Caught", "0 fish")
 	local bestLabel = readout("Best catch", "None yet")
-	note(p, "Charges through the game's own throw and lets go on the first pass through the PERFECT zone, every time (the game's own auto mode picks a random spot), and casts again the instant the last catch is in. While the bait sinks it steers toward the most valuable fish in reach (the game's own coin value for that fish, size included), switching if a better one swims into reach, and in the catch fight it clicks at the game's auto-fight pace. Auto fight also helps when you fish by hand. Stand in a fishing spot with your rod; it equips your rod if you're holding nothing.")
+	note(p, "Charges through the game's own throw and lets go on the first pass through the PERFECT zone, every time (the game's own auto mode picks a random spot), and casts again the instant the last catch is in. As the hook rises it plans a route through the fish it can still steer to in time and follows the one that fills every free slot of your capacity, picking the most valuable mix (the game's own coin value for each fish, size included), replanning ten times a second as fish swim, and in the catch fight it clicks at the game's auto-fight pace. Auto fight also helps when you fish by hand. Stand in a fishing spot with your rod; it equips your rod if you're holding nothing.")
 
 	section(p, "Selling")
 	switch(p, "Auto sell at the merchant", "dfSell")
@@ -6840,38 +6840,91 @@ local function buildDeepFishing(p)
 		end
 	end)
 
-	-- steer the sinking bait toward the rarest fish in reach (our throws only)
-	local target
+	-- steer the rising hook along the route that fills every free slot, most valuable mix first (our throws only)
+	local target, planAt, riseRate, lastHangY = nil, 0, 10, nil
+	local STEER = 40 -- studs a second sideways the plan allows, well under what mouse steering does
 	local function valid(fish, y)
 		if type(fish) ~= "table" or fish.caught or fish.escaped or not fish.model or not fish.model.Parent then return false end
 		local pp = fish.model.PrimaryPart
 		return pp ~= nil and y <= pp.Position.Y + pp.Size.Y * 0.5
 	end
-	connect(RunService.Heartbeat, function(dt)
-		if not (Settings.dfFish and Settings.dfAim and driving and TC.Active) then return end
-		if not TC.Catchable or TC.CatchWindowOver or TC.ReelRequested or fighting() then return end
-		local school = TC.Sub and TC.Sub.FishSchool
-		local fishes, hang, landing = school and school.Fish, TC.HangPoint, TC.ActiveLanding
-		if type(fishes) ~= "table" or not hang or not landing then return end
-		if not valid(target, hang.Y) then target = nil end
-		local bestV, bestD = target and fishValue(target) or -math.huge, math.huge
+	local function offsetOf(pos, landing)
+		return ((pos - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
+	end
+	local function replanHook(fishes, hang, landing)
+		local okC, cap = pcall(TC.GetHookCapacity, TC)
+		local okN, have = pcall(TC.CaughtFishCount, TC)
+		local slots = math.max((okC and tonumber(cap) or 1) - (okN and tonumber(have) or 0), 0)
+		if slots <= 0 then return nil end
+		local list = {}
 		for _, fish in ipairs(fishes) do
-			if fish ~= target and valid(fish, hang.Y) then
-				local off = ((fish.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
-				if math.abs(off) <= 50 then -- only fish the bait can actually be steered to
-					local value = fishValue(fish)
-					local dist = math.abs(off - (TC.AimOffset or 0))
-					if value > bestV or (value == bestV and dist < bestD) then
-						target, bestV, bestD = fish, value, dist
-					end
+			if valid(fish, hang.Y) then
+				local pp = fish.model.PrimaryPart
+				local off = offsetOf(pp.Position, landing)
+				if math.abs(off) <= 50 then
+					table.insert(list, { fish = fish, off = off, y = pp.Position.Y, value = fishValue(fish), tol = math.max(pp.Size.X, pp.Size.Z) * 0.5 + 1.25 })
 				end
 			end
 		end
+		table.sort(list, function(a, b) return a.y < b.y end) -- the order the rising hook meets them
+		local a0, y0 = TC.AimOffset or 0, hang.Y
+		local function reach(fromOff, fromY, to)
+			return math.abs(to.off - fromOff) <= STEER * math.max(to.y - fromY, 0) / riseRate + to.tol
+		end
+		-- best[i][c]: the most valuable route of c fish that ends on fish i
+		local best, top = {}, nil
+		for i2, f in ipairs(list) do
+			local row = {}
+			best[i2] = row
+			if reach(a0, y0, f) then row[1] = { v = f.value } end
+			for j2 = 1, i2 - 1 do
+				local g = list[j2]
+				if reach(g.off, g.y, f) then
+					for c, e in pairs(best[j2]) do
+						if c < slots then
+							local v = e.v + f.value
+							local cur = row[c + 1]
+							if not cur or v > cur.v then row[c + 1] = { v = v, prev = j2, pc = c } end
+						end
+					end
+				end
+			end
+			for c, e in pairs(row) do
+				if not top or c > top.c or (c == top.c and e.v > top.v) then top = { i = i2, c = c, v = e.v } end
+			end
+		end
+		if not top then return nil end
+		local first, at, c = nil, top.i, top.c
+		while at do
+			first = list[at].fish
+			local e = best[at][c]
+			at, c = e.prev, e.pc
+		end
+		return first, top.c, slots
+	end
+	connect(RunService.Heartbeat, function(dt)
+		if not (Settings.dfFish and Settings.dfAim and driving and TC.Active) then return end
+		if not TC.Catchable or TC.CatchWindowOver or TC.ReelRequested or fighting() then
+			lastHangY = nil
+			return
+		end
+		local school = TC.Sub and TC.Sub.FishSchool
+		local fishes, hang, landing = school and school.Fish, TC.HangPoint, TC.ActiveLanding
+		if type(fishes) ~= "table" or not hang or not landing then return end
+		if lastHangY and TC.PullStart then
+			local v = (hang.Y - lastHangY) / math.max(dt, 1e-3)
+			if v > 0.5 then riseRate += (v - riseRate) * math.clamp(dt * 4, 0, 1) end
+		end
+		lastHangY = hang.Y
+		if os.clock() - planAt > 0.1 or not valid(target, hang.Y) then
+			planAt = os.clock()
+			local okP, first = pcall(replanHook, fishes, hang, landing)
+			target = okP and first or nil
+		end
 		if not target then return end
 		TC.AimLocked = true
-		local off = ((target.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
-		off = math.clamp(off, -50, 50)
-		TC.AimOffset = (TC.AimOffset or 0) + (off - (TC.AimOffset or 0)) * math.clamp(dt * 8, 0, 1)
+		local off = math.clamp(offsetOf(target.model.PrimaryPart.Position, landing), -50, 50)
+		TC.AimOffset = (TC.AimOffset or 0) + (off - (TC.AimOffset or 0)) * math.clamp(dt * 18, 0, 1) -- the game's own steer rate
 	end)
 
 	-- catch fight: click at the game's own auto-fight pace (about 7 a second)
