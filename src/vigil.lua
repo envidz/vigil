@@ -221,6 +221,13 @@ local Settings = {
 	frRods = false,
 	frLines = false,
 	frRewards = false,
+	dfFish = false,
+	dfAim = true,
+	dfFight = true,
+	dfSell = false,
+	dfSellUnder = "Everything",
+	dfRods = false,
+	dfRewards = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4231,7 +4238,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -6575,8 +6582,329 @@ local function buildFishRng(p)
 	end)
 end
 
+local function buildDeepFishing(p)
+	local RunService = game:GetService("RunService")
+	local Storage = game:GetService("ReplicatedStorage")
+	local CollectionService = game:GetService("CollectionService")
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+	local function every(key, seconds, job)
+		task.spawn(function()
+			while hookState.alive do
+				if Settings[key] then pcall(job) end
+				task.wait(seconds)
+			end
+		end)
+	end
+	local function comma(n)
+		return (tostring(math.floor(tonumber(n) or 0)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+	end
+	local SELL_UNDER = { ["Everything"] = false, ["Under $1K"] = 1e3, ["Under $10K"] = 1e4, ["Under $100K"] = 1e5, ["Under $1M"] = 1e6 }
+
+	section(p, "Auto fish")
+	switch(p, "Auto fish", "dfFish")
+	switch(p, "Aim at the rarest fish", "dfAim")
+	switch(p, "Auto fight", "dfFight")
+	local statusLabel = readout("Status", "Off")
+	local catchLabel = readout("Caught", "0 fish")
+	local bestLabel = readout("Rarest", "None yet")
+	note(p, "Charges through the game's own throw and lets go when the moving bar sits in the PERFECT zone, every time (the game's own auto mode picks a random spot). While the bait sinks it steers toward the rarest fish in reach, and in the catch fight it clicks at the game's auto-fight pace. Auto fight also helps when you fish by hand. Stand in a fishing spot with your rod; it equips your rod if you're holding nothing.")
+
+	section(p, "Selling")
+	switch(p, "Auto sell at the merchant", "dfSell")
+	segmented(p, "Sell", "dfSellUnder", { "Everything", "Under $1K", "Under $10K", "Under $100K", "Under $1M" })
+	local sellLabel = readout("Cash", "0")
+	note(p, "Uses the merchant's own sell, the same call as talking to him, and only while you're standing next to one (his talk range). Fish you've locked or equipped are kept by the game.")
+
+	section(p, "Shop")
+	switch(p, "Auto buy rods", "dfRods")
+	local shopLabel = readout("Rod", "")
+	note(p, "Buys the cheapest regular rod with more luck than your best one once you have the cash, then equips it. Only cash rods unlocked in your world; event, Candy Corn and Robux rods are never touched, and it never swaps you to a weaker rod.")
+
+	section(p, "Rewards")
+	switch(p, "Auto claim rewards", "dfRewards")
+	local rewardLabel = readout("Last claimed", "Nothing yet")
+	note(p, "Claims playtime gifts and daily rewards as soon as the game says they're ready.")
+
+	-- the game's own controllers (require hands back the live, shared tables)
+	local F, TC, Sea, Daily, Gift
+	local ok = pcall(function()
+		local ctl = LocalPlayer:WaitForChild("PlayerScripts", 20):WaitForChild("Client", 20):WaitForChild("Controllers", 20)
+		F = require(ctl:WaitForChild("Fishing", 20))
+		Sea = require(Storage.Shared.Modules.World.Sea)
+		local t0 = os.clock()
+		while not (F.Controllers and F.Controllers.ThrowCinematic and F.PlayerData) and os.clock() - t0 < 30 do task.wait(0.5) end
+		TC = F.Controllers.ThrowCinematic
+	end)
+	if not ok or not TC then
+		statusLabel.Text = "Unavailable"
+		return
+	end
+	pcall(function() Daily = require(Storage.Shared.UI.Interfaces.DailyRewards) end)
+	pcall(function()
+		local misc = LocalPlayer.PlayerScripts.Client.Controllers.Islands.IslandMisc
+		Gift = require(misc:FindFirstChild("PlaytimeGift", true))
+	end)
+	local function data()
+		local okD, d = pcall(function() return F.PlayerData:Get() end)
+		return okD and d or nil
+	end
+	local function rarityOrder(name)
+		local item = F.Content.Item.Fish.Items[name]
+		return item and item.Rarity and F.Config.RarityConfig.GetOrder(item.Rarity) or -1, item and item.Rarity
+	end
+	local function minigame()
+		return TC.Sub and TC.Sub.CatchMinigame
+	end
+	local function fighting()
+		local m = minigame()
+		return m and m:IsActive() or false
+	end
+
+	-- catch tally: fish the game marks caught on our own throws
+	local caught, bestOrder = 0, -1
+	local counted = setmetatable({}, { __mode = "k" })
+	local function tally()
+		local school = TC.Sub and TC.Sub.FishSchool
+		if not school or type(school.Fish) ~= "table" then return end
+		for _, fish in ipairs(school.Fish) do
+			if type(fish) == "table" and fish.caught and not fish.escaped and not counted[fish] then
+				counted[fish] = true
+				caught += 1
+				local order, rarity = rarityOrder(fish.name)
+				if order > bestOrder then
+					bestOrder = order
+					bestLabel.Text = (rarity or "?") .. ", " .. tostring(fish.name)
+				end
+			end
+		end
+		catchLabel.Text = comma(caught) .. " fish"
+	end
+
+	-- throw: hold the charge until the bar is in the PERFECT zone, then let go
+	local driving = false
+	local function perfectAt(t)
+		return F:TierAt(math.clamp(t - 0.012, 0, 1)) == "Perfect" and F:TierAt(math.clamp(t + 0.012, 0, 1)) == "Perfect"
+	end
+	local function castPerfect()
+		F:StartHook()
+		if not F.Charging then return end
+		driving = true
+		local t0 = os.clock()
+		while F.Charging and hookState.alive and os.clock() - t0 < 8 do
+			if os.clock() - t0 > 0.4 and perfectAt(F.HookT or 0) then
+				F:StopHook()
+				return
+			end
+			RunService.Heartbeat:Wait()
+		end
+		if F.Charging then F:StopHook() end
+	end
+	local function equipRod()
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local d = data()
+		local rod = LocalPlayer:FindFirstChild("Backpack") and LocalPlayer.Backpack:FindFirstChild(d and d.RodEquipped or "Wooden Rod")
+		if hum and rod and rod:IsA("Tool") then hum:EquipTool(rod) end
+	end
+	local REASONS = {
+		not_in_area = "Go to a fishing spot", swimming = "Swimming", boat_moving = "Boat moving",
+		wrong_rod = "Rod doesn't work here", cutscene = "Cutscene", trading = "Trading", ui_open = "Close the menu",
+	}
+	task.spawn(function()
+		local nextCast = 0
+		while hookState.alive do
+			pcall(function()
+				if not Settings.dfFish then
+					if driving and TC.Active and not TC.ReelRequested then TC.AimLocked = false end
+					driving = false
+					statusLabel.Text = "Off"
+					return
+				end
+				if TC.Active or F.Charging then
+					if driving then tally() end
+					statusLabel.Text = fighting() and "Fighting" or (TC.ReelRequested and "Reeling in" or "Fishing")
+					nextCast = os.clock() + 1.3 + math.random() * 0.9
+					return
+				end
+				driving = false
+				local can, why = F:CanStartThrow()
+				if not can then
+					if why == "no_rod" or why == "rod_mismatch" then
+						statusLabel.Text = "Equipping rod"
+						equipRod()
+					else
+						statusLabel.Text = REASONS[why] or ("Waiting (" .. tostring(why) .. ")")
+					end
+					return
+				end
+				if F:UIOwnsScreen() then
+					statusLabel.Text = "Close the menu"
+					return
+				end
+				if TC:GetBaitCapacity() <= 0 then
+					statusLabel.Text = "Backpack full"
+					return
+				end
+				if os.clock() >= nextCast then
+					statusLabel.Text = "Charging"
+					castPerfect()
+				end
+			end)
+			task.wait(0.2)
+		end
+	end)
+
+	-- steer the sinking bait toward the rarest fish in reach (our throws only)
+	local target
+	local function valid(fish, y)
+		if type(fish) ~= "table" or fish.caught or fish.escaped or not fish.model or not fish.model.Parent then return false end
+		local pp = fish.model.PrimaryPart
+		return pp ~= nil and y <= pp.Position.Y + pp.Size.Y * 0.5
+	end
+	connect(RunService.Heartbeat, function(dt)
+		if not (Settings.dfFish and Settings.dfAim and driving and TC.Active) then return end
+		if not TC.Catchable or TC.CatchWindowOver or TC.ReelRequested or fighting() then return end
+		local school = TC.Sub and TC.Sub.FishSchool
+		local fishes, hang, landing = school and school.Fish, TC.HangPoint, TC.ActiveLanding
+		if type(fishes) ~= "table" or not hang or not landing then return end
+		if not valid(target, hang.Y) then
+			target = nil
+			local bestO, bestD = -math.huge, math.huge
+			for _, fish in ipairs(fishes) do
+				if valid(fish, hang.Y) then
+					local order = fish.special and 1e6 or rarityOrder(fish.name)
+					local off = ((fish.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
+					local dist = math.abs(off - (TC.AimOffset or 0))
+					if order > bestO or (order == bestO and dist < bestD) then
+						target, bestO, bestD = fish, order, dist
+					end
+				end
+			end
+		end
+		if not target then return end
+		TC.AimLocked = true
+		local off = ((target.model.PrimaryPart.Position - landing) * Vector3.new(1, 0, 1)):Dot(Sea.CAST_AXIS)
+		off = math.clamp(off, -50, 50)
+		TC.AimOffset = (TC.AimOffset or 0) + (off - (TC.AimOffset or 0)) * math.clamp(dt * 8, 0, 1)
+	end)
+
+	-- catch fight: click at the game's own auto-fight pace (about 7 a second)
+	task.spawn(function()
+		while hookState.alive do
+			if Settings.dfFight and fighting() then
+				pcall(function() minigame():Click() end)
+				task.wait(0.143 * (1 + (math.random() * 2 - 1) * 0.25))
+			else
+				task.wait(0.1)
+			end
+		end
+	end)
+
+	-- cash readout
+	task.spawn(function()
+		while hookState.alive do
+			local d = data()
+			if d then
+				sellLabel.Text = "$" .. comma(d.Cash)
+				shopLabel.Text = tostring(d.RodEquipped or "")
+			end
+			task.wait(1)
+		end
+	end)
+
+	-- selling, only within the merchant's talk range
+	local function nearestSeller()
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not root then return nil end
+		local best, bestDist
+		for _, npc in ipairs(CollectionService:GetTagged("NPC_Sell")) do
+			if npc:IsDescendantOf(workspace) then
+				local okP, pos = pcall(function() return npc:GetPivot().Position end)
+				local dist = okP and (pos - root.Position).Magnitude
+				if dist and (not bestDist or dist < bestDist) then best, bestDist = npc, dist end
+			end
+		end
+		return best, bestDist
+	end
+	every("dfSell", 3, function()
+		if TC.Active or F.Charging then return end
+		local npc, dist = nearestSeller()
+		if not npc or dist > 11 then return end
+		local res = F.Events.Client("SellAll"):Invoke(5, "Fish", SELL_UNDER[Settings.dfSellUnder] or nil)
+		if type(res) == "table" and (res.Amount or 0) > 0 then
+			toast("Sold " .. comma(res.Amount) .. " fish for $" .. comma(res.Value))
+			task.wait(5)
+		end
+	end)
+
+	-- rods: cheapest regular cash rod with more luck than the best one owned
+	every("dfRods", 5, function()
+		local d = data()
+		if not d or type(d.Rods) ~= "table" then return end
+		local Rod, EG = F.Content.Item.Rod, F.Config.EventGearConfig
+		if EG.CurrencyOf(EG.SetHere(d)) ~= "Cash" then return end
+		local function regular(name, item)
+			if not item or (item.LayoutOrder or 999) >= 100 or Rod:LockedBehind(item, d) then return false end
+			local okS, set = pcall(EG.SetOf, name)
+			return not (okS and set)
+		end
+		local bestName, bestLuck = nil, -1
+		for name in pairs(d.Rods) do
+			local item = Rod.Items[name]
+			if regular(name, item) and (item.Luck or 0) > bestLuck then bestName, bestLuck = name, item.Luck or 0 end
+		end
+		local buyName, buyPrice
+		for name, item in pairs(Rod.Items) do
+			if not d.Rods[name] and regular(name, item) and (item.Luck or 0) > bestLuck and (item.Price or math.huge) <= (d.Cash or 0) then
+				if not buyPrice or item.Price < buyPrice then buyName, buyPrice = name, item.Price end
+			end
+		end
+		if buyName and not TC.Active and not F.Charging then
+			F.Events.Client("RodShop"):Fire(true, "Buy", buyName)
+			toast("Bought " .. buyName)
+			return
+		end
+		local equipped = Rod.Items[d.RodEquipped or ""]
+		if bestName and d.RodEquipped ~= bestName and (equipped == nil or (equipped.Luck or 0) < bestLuck)
+			and not TC.Active and not F.Charging and not EG.EquipBlockedHere(d, bestName) then
+			F.Events.Client("RodShop"):Fire(true, "Equip", bestName)
+		end
+	end)
+
+	-- rewards
+	every("dfRewards", 5, function()
+		if Gift then
+			local okG, stage, left = pcall(function() return Gift:Stage(), Gift:Remaining() end)
+			if okG and F.Config.PlaytimeGiftConfig.Stages[stage] and left <= 0 then
+				F.Events.Client("PlaytimeGift"):Fire(true, "Claim")
+				rewardLabel.Text = "Playtime gift " .. tostring(stage)
+				task.wait(3)
+			end
+		end
+		if Daily then
+			local DR = F.Config.DailyRewardsConfig
+			local total = (DR.NormalDays or 7) + (DR.WeekDays or 7) * (DR.CycleWeeks or 3)
+			local okR, record = pcall(Daily.Record, Daily)
+			local before = okR and type(record) == "table" and record.Claimed
+			for day = 1, total do pcall(Daily.Claim, Daily, day) end
+			task.wait(2)
+			local okA, after = pcall(Daily.Record, Daily)
+			if okA and type(after) == "table" and before and after.Claimed ~= before then
+				rewardLabel.Text = "Daily reward " .. tostring(after.Claimed)
+			end
+		end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Deep Fishing", gameId = 10526853622, placeId = 132239307080610, build = buildDeepFishing },
 	{ name = "FISH RNG", gameId = 10773682935, placeId = 97131604622053, build = buildFishRng },
 	{ name = "War Simulator", gameId = 1751760283, placeId = 5062619730, build = buildWarSimulator },
 	{ name = "Agaric.io", gameId = 10015248476, placeId = 139160315848670, build = buildAgaric },
