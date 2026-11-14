@@ -248,6 +248,9 @@ local Settings = {
 	dfIceAuto = false,
 	dfIceBuyAuto = false,
 	dfIceStop = 5,
+	dfIceGoal = "Rarest fish",
+	dfIceTopStage = true,
+	dfIceUpgrades = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4258,7 +4261,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -6692,10 +6695,14 @@ local function buildDeepFishing(p)
 	local iceLabel = readout("Ring hits", "0 / 0")
 	note(p, "In the ice fishing hole, drops the bait the moment the swing crosses the middle of the ring, every swing, checked against the game's own landing rule before it lets go. Ring hits give the better catch odds; whether the fish then bites is still the game's roll. Works with the game's own Auto too, and drops before it would.")
 	switch(p, "Auto run pipeline", "dfIceAuto")
+	segmented(p, "Go for", "dfIceGoal", { "Rarest fish", "Set level" })
 	slider(p, "Claim at level", "dfIceStop", 3, 10, 1, function(v) return "Level " .. v end)
+	switch(p, "Fish the highest unlocked stage", "dfIceTopStage")
+	switch(p, "Buy Luck and Aim with shards", "dfIceUpgrades")
 	switch(p, "Buy the Auto perk with shards", "dfIceBuyAuto")
 	local iceRunLabel = readout("Run", "Not in the hole")
 	note(p, "Runs the hole start to finish on the game's own Auto perk: casts, uses each catch as bait to go deeper, claims at the level you pick, and casts again. If the fish gets away or Auto stops itself, it switches Auto back on and starts a new run. Needs the Auto perk (50 ice shards from the hole's upgrade board); turn on the buy switch to have it bought for you once you can afford it. Pair it with Perfect ice drop so every swing lands in the ring.")
+	note(p, "Rarest fish keeps baiting all the way to level 10, the rarest fish in the stage, and only claims there (Set level uses the slider instead). Highest stage moves you to the deepest stage you've unlocked between runs, since each stage's fish are rarer than the last; reaching level 7 in a stage unlocks the next. The Luck and Aim switch spends ice shards on the hole's Luck and Aim upgrades, cheapest first, which raise the odds of the fish holding on. Second Chance (Robux) is never used.")
 
 	-- the game's own controllers (require hands back the live, shared tables)
 	local F, TC, Sea, Daily, Gift
@@ -7245,7 +7252,41 @@ local function buildDeepFishing(p)
 				end
 				return
 			end
-			local want = math.clamp(math.floor(Settings.dfIceStop or 5), IceCfg.Upgrades.Auto.StopMin, IceCfg.MaxLevel)
+			local want = Settings.dfIceGoal == "Rarest fish" and IceCfg.MaxLevel
+				or math.clamp(math.floor(Settings.dfIceStop or 5), IceCfg.Upgrades.Auto.StopMin, IceCfg.MaxLevel)
+			-- spend shards on Luck / Aim, cheapest next level first
+			if Settings.dfIceUpgrades and os.clock() - (Ice.BuyAt or 0) > 3 then
+				local d = data()
+				local shards = d and tonumber(d.IceShards) or 0
+				local pick, pickPrice
+				for _, name in ipairs({ "Luck", "Aim" }) do
+					local prices = IceCfg.Upgrades[name].Prices
+					local price = prices[(tonumber(perks[name]) or 0) + 1]
+					if price and price <= shards and (not pickPrice or price < pickPrice) then pick, pickPrice = name, price end
+				end
+				if pick then
+					Ice:PressUpgrade(pick)
+					toast("Ice " .. pick .. " upgrade (" .. comma(pickPrice) .. " shards)")
+				end
+			end
+			-- move to the deepest unlocked stage between runs (the game only allows it with Auto off and Idle)
+			if Settings.dfIceTopStage and mode == "Idle" and Ice.StageIndex and Ice.Data.Unlocked then
+				local top = Ice.StageIndex
+				for i = Ice.StageIndex + 1, IceCfg.ReleasedStages do
+					local st = IceCfg.Stages[i]
+					if st and Ice.Data.Unlocked[st.Key] then top = i end
+				end
+				if top > Ice.StageIndex then
+					local from = Ice.StageIndex
+					if Ice.AutoOn then Ice:SetAuto(false) end
+					Ice:StepStage(top - from)
+					local t0 = os.clock()
+					repeat task.wait(0.2) until Ice.StageIndex ~= from or os.clock() - t0 > 4
+					toast("Ice stage: " .. tostring(IceCfg.Stages[Ice.StageIndex] and IceCfg.Stages[Ice.StageIndex].Title))
+					Ice:SetAuto(true)
+					return
+				end
+			end
 			if perks.AutoStop ~= want and not Ice.AutoStopPending then
 				Ice:StepAutoStop(want - perks.AutoStop)
 			end
@@ -7263,7 +7304,8 @@ local function buildDeepFishing(p)
 			end
 			local rv = Ice.RunView
 			if rv and rv.Level then
-				iceRunLabel.Text = string.format("Level %d/%d %s, %d runs", rv.Level, want, tostring(rv.Name or ""), iceRuns)
+				local st = IceCfg.Stages[Ice.StageIndex or 1]
+				iceRunLabel.Text = string.format("%s L%d/%d %s, %d runs", st and st.Title or "", rv.Level, want, tostring(rv.Name or ""), iceRuns)
 			else
 				iceRunLabel.Text = mode .. ", " .. iceRuns .. " runs"
 			end
