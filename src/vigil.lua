@@ -251,6 +251,24 @@ local Settings = {
 	dfIceGoal = "Rarest fish",
 	dfIceTopStage = true,
 	dfIceUpgrades = false,
+	wdEsp = false,
+	wdSulfur = true,
+	wdMetal = true,
+	wdCoal = false,
+	wdCopper = false,
+	wdStone = false,
+	wdOtherOres = true,
+	wdDeposits = true,
+	wdHemp = false,
+	wdFood = false,
+	wdTrees = false,
+	wdLoot = true,
+	wdBarrels = false,
+	wdSafes = true,
+	wdAirdrop = true,
+	wdOutline = true,
+	wdRange = 600,
+	wdMax = 60,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4261,7 +4279,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -7484,8 +7502,232 @@ local function buildDeepFishing(p)
 	end)
 end
 
+local function buildWorld(p)
+	local RunService = game:GetService("RunService")
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+	local rgb = Color3.fromRGB
+
+	-- what each thing is called, its colour, the switch that shows it, and whether it gets an outline
+	local NODES = {
+		sulfur_node = { "Sulfur", rgb(255, 214, 64), "wdSulfur", true },
+		metal_node = { "Metal", rgb(150, 190, 235), "wdMetal", true },
+		coal_node = { "Coal", rgb(150, 150, 150), "wdCoal", true },
+		copper_node = { "Copper", rgb(235, 140, 70), "wdCopper", true },
+		boulder = { "Stone", rgb(205, 200, 185), "wdStone", true },
+		stone_pickup = { "Stone pickup", rgb(205, 200, 185), "wdStone" },
+		wild_hemp = { "Hemp", rgb(110, 225, 120), "wdHemp" },
+		berry_bush = { "Berries", rgb(225, 90, 130), "wdFood" },
+		wild_blueberry = { "Blueberries", rgb(110, 130, 245), "wdFood" },
+		wild_carrot = { "Carrot", rgb(245, 150, 60), "wdFood" },
+		wild_potato = { "Potato", rgb(200, 170, 110), "wdFood" },
+		wild_wheat = { "Wheat", rgb(240, 215, 120), "wdFood" },
+		wild_yarrow = { "Yarrow", rgb(235, 235, 235), "wdFood" },
+	}
+	local LOOT = {
+		supply_crate = { "Supply crate", rgb(90, 200, 255), "wdLoot" },
+		barrel = { "Barrel", rgb(70, 140, 200), "wdBarrels" },
+	}
+	local function pretty(kind)
+		kind = tostring(kind):gsub("_node$", ""):gsub("_", " ")
+		return (kind:gsub("^%l", string.upper))
+	end
+
+	section(p, "ESP")
+	switch(p, "Resource ESP", "wdEsp")
+	slider(p, "Range", "wdRange", 100, 2000, 50, function(v) return string.format("%d studs", v) end)
+	slider(p, "Most shown", "wdMax", 10, 150, 5, function(v) return tostring(v) end)
+	switch(p, "Outline ores", "wdOutline")
+	local nearestLabel = readout("Nearest sulfur", "None in range")
+	local countLabel = readout("Showing", "0")
+	note(p, "Labels every resource in range with its name and distance, through walls. The server only streams in about 640 studs around you, so anything further shows up as you travel. Outlines go on the nearest ores, up to the 30 Roblox draws at once.")
+
+	section(p, "Ores")
+	switch(p, "Sulfur", "wdSulfur")
+	switch(p, "Metal", "wdMetal")
+	switch(p, "Coal", "wdCoal")
+	switch(p, "Copper", "wdCopper")
+	switch(p, "Stone", "wdStone")
+	switch(p, "Other ores", "wdOtherOres")
+	switch(p, "Deposits", "wdDeposits")
+	note(p, "Other ores catches any new node type the game adds. Deposits are the big ore fields, labelled with what they give.")
+
+	section(p, "Plants and wood")
+	switch(p, "Hemp", "wdHemp")
+	switch(p, "Food", "wdFood")
+	switch(p, "Trees", "wdTrees")
+
+	section(p, "Loot")
+	switch(p, "Supply crates", "wdLoot")
+	switch(p, "Barrels", "wdBarrels")
+	switch(p, "Safes", "wdSafes")
+	switch(p, "Airdrop", "wdAirdrop")
+	note(p, "Only full crates and barrels are shown. Safes show their tier and whether they're locked, open or being cracked, with the time left.")
+
+	local folder = new("Folder", { Name = "VigilWorld", Parent = ROOT })
+	local tags = {}
+
+	local function anchorOf(inst)
+		if inst:IsA("BasePart") then return inst end
+		return inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)) or nil
+	end
+
+	local function makeTag(target, part, name, colour)
+		local gui = new("BillboardGui", {
+			Name = "Tag", Adornee = part, AlwaysOnTop = true, Size = UDim2.fromOffset(160, 34), StudsOffset = Vector3.new(0, 2.5, 0),
+			LightInfluence = 0, MaxDistance = math.huge, ResetOnSpawn = false, Parent = folder,
+		})
+		new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.fromOffset(7, 7),
+			BackgroundColor3 = colour, BorderSizePixel = 0, Parent = gui,
+		}, { round("full"), new("UIStroke", { Color = Color3.new(0, 0, 0), Transparency = 0.4, Thickness = 1 }) })
+		local label = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 9), Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+			FontFace = Tokens.fontStrong, TextSize = 13, TextColor3 = colour, Text = name,
+			TextStrokeTransparency = 0.45, Parent = gui,
+		})
+		local info = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1,
+			FontFace = Tokens.mono, TextSize = 11, TextColor3 = Color3.fromRGB(225, 225, 225), Text = "",
+			TextStrokeTransparency = 0.45, Parent = gui,
+		})
+		local tag = { gui = gui, label = label, info = info, colour = colour }
+		tags[target] = tag
+		return tag
+	end
+
+	local function dropTag(target)
+		local tag = tags[target]
+		if not tag then return end
+		tag.gui:Destroy()
+		if tag.highlight then tag.highlight:Destroy() end
+		tags[target] = nil
+	end
+
+	local function clock(seconds)
+		seconds = math.max(0, math.floor(seconds))
+		if seconds >= 3600 then return string.format("%dh %02dm", seconds // 3600, seconds % 3600 // 60) end
+		return seconds >= 60 and string.format("%dm %02ds", seconds // 60, seconds % 60) or string.format("%ds", seconds)
+	end
+
+	-- everything the switches allow, as { target, part, name, colour, extra, outline }
+	local function gather(list)
+		local nodes = workspace:FindFirstChild("Nodes")
+		for _, node in ipairs(nodes and nodes:GetChildren() or {}) do
+			local kind = node:GetAttribute("NodeKind")
+			local spec = NODES[kind]
+			local key = spec and spec[3]
+			if not spec and type(kind) == "string" then
+				if kind:find("_node$") then spec, key = { pretty(kind), rgb(255, 255, 255), "wdOtherOres", true }, "wdOtherOres"
+				elseif kind:find("^tree_") then spec, key = { pretty(kind:gsub("^tree_", "")) .. " tree", rgb(120, 180, 90), "wdTrees" }, "wdTrees" end
+			end
+			if spec and Settings[key] and node:GetAttribute("State") ~= "empty" and node:GetAttribute("State") ~= "depleted" then
+				local pct = tonumber(node:GetAttribute("UnitsPct"))
+				table.insert(list, { node, node, spec[1], spec[2], pct and pct < 100 and (pct .. "%") or nil, spec[4], kind })
+			end
+		end
+		if Settings.wdDeposits then
+			local deposits = workspace:FindFirstChild("Deposits")
+			for _, d in ipairs(deposits and deposits:GetChildren() or {}) do
+				local part = anchorOf(d)
+				if part then
+					local label = d:GetAttribute("Label")
+					table.insert(list, { d, part, label and pretty(tostring(label):lower()) or "Deposit", rgb(190, 150, 255), nil, false })
+				end
+			end
+		end
+		local loot = workspace:FindFirstChild("Loot")
+		for _, crate in ipairs(loot and loot:GetChildren() or {}) do
+			local kind = crate:GetAttribute("Kind")
+			local spec = LOOT[kind] or { pretty(kind or "Loot"), rgb(90, 200, 255), "wdLoot" }
+			local part = Settings[spec[3]] and crate:GetAttribute("State") == "full" and anchorOf(crate)
+			if part then table.insert(list, { crate, part, spec[1], spec[2], nil, false }) end
+		end
+		if Settings.wdSafes then
+			local safes = workspace:FindFirstChild("Safes")
+			for _, safe in ipairs(safes and safes:GetChildren() or {}) do
+				local part = anchorOf(safe)
+				if part then
+					local state = tostring(safe:GetAttribute("State") or "")
+					local due = tonumber(safe:GetAttribute("DueAt"))
+					local extra = state
+					if state == "cracking" and due then extra = "cracking, " .. clock(due - workspace:GetServerTimeNow()) end
+					local tier = safe:GetAttribute("ContainerName") or (safe:GetAttribute("Tier") and pretty(safe:GetAttribute("Tier")) .. " " .. safe.Name:lower()) or safe.Name
+					table.insert(list, { safe, part, pretty(tostring(tier):lower()), rgb(255, 120, 90), extra, false })
+				end
+			end
+		end
+		if Settings.wdAirdrop then
+			local drops = workspace:FindFirstChild("AirDropShow")
+			for _, drop in ipairs(drops and drops:GetChildren() or {}) do
+				local part = anchorOf(drop)
+				if part then table.insert(list, { drop, part, "Airdrop", rgb(255, 80, 80), nil, false, nil, true }) end
+			end
+		end
+	end
+
+	task.spawn(function()
+		while hookState.alive do
+			if Settings.wdEsp then
+				local camera = workspace.CurrentCamera
+				local root = myRoot()
+				local from = (root and root.Position) or (camera and camera.CFrame.Position) or Vector3.zero
+				local list = {}
+				pcall(gather, list)
+				local nearestSulfur
+				local keep = {}
+				for _, item in ipairs(list) do
+					item.d = (item[2].Position - from).Magnitude
+					if item[7] == "sulfur_node" and (not nearestSulfur or item.d < nearestSulfur) then nearestSulfur = item.d end
+					if item.d <= Settings.wdRange or item[8] then table.insert(keep, item) end -- the airdrop shows at any range
+				end
+				table.sort(keep, function(a, b) return a.d < b.d end)
+				local shown, outlines = {}, 0
+				for i = 1, math.min(#keep, Settings.wdMax) do
+					local item = keep[i]
+					local target = item[1]
+					shown[target] = true
+					local tag = tags[target] or makeTag(target, item[2], item[3], item[4])
+					if tag.gui.Adornee ~= item[2] then tag.gui.Adornee = item[2] end
+					local text = string.format("%dm", math.floor(item.d)) .. (item[5] and ("  " .. item[5]) or "")
+					if tag.info.Text ~= text then tag.info.Text = text end
+					local wantOutline = Settings.wdOutline and item[6] and outlines < 30
+					if wantOutline then
+						outlines += 1
+						if not tag.highlight then
+							tag.highlight = new("Highlight", {
+								Adornee = target, FillColor = item[4], FillTransparency = 0.75, OutlineColor = item[4],
+								OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = folder,
+							})
+						end
+					elseif tag.highlight then
+						tag.highlight:Destroy()
+						tag.highlight = nil
+					end
+				end
+				for target in pairs(tags) do
+					if not shown[target] or not target.Parent then dropTag(target) end
+				end
+				countLabel.Text = string.format("%d of %d", math.min(#keep, Settings.wdMax), #list)
+				nearestLabel.Text = nearestSulfur and string.format("%d studs", math.floor(nearestSulfur)) or "None loaded"
+			elseif next(tags) then
+				for target in pairs(tags) do dropTag(target) end
+				countLabel.Text = "0"
+			end
+			task.wait(0.4)
+		end
+		for target in pairs(tags) do dropTag(target) end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "World", gameId = 10771328092, placeId = 124605577845364, build = buildWorld },
 	{ name = "Deep Fishing", gameId = 10526853622, placeId = 132239307080610, build = buildDeepFishing },
 	{ name = "FISH RNG", gameId = 10773682935, placeId = 97131604622053, build = buildFishRng },
 	{ name = "War Simulator", gameId = 1751760283, placeId = 5062619730, build = buildWarSimulator },
