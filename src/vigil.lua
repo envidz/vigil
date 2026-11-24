@@ -269,6 +269,9 @@ local Settings = {
 	wdOutline = true,
 	wdRange = 600,
 	wdMax = 60,
+	wdTpTarget = "Sulfur",
+	wdTpKeyOn = false,
+	wdTpKey = "J",
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -7562,6 +7565,15 @@ local function buildWorld(p)
 	switch(p, "Food", "wdFood")
 	switch(p, "Trees", "wdTrees")
 
+	section(p, "Walk to")
+	segmented(p, "Walk to", "wdTpTarget", { "Sulfur", "Metal", "Crate" })
+	local teleport, stopWalk -- defined below
+	buttonRow(p, "Go", { { "Nearest", function() teleport(false, true) end }, { "Next", function() teleport(true) end }, { "Stop", function() stopWalk() end } })
+	switch(p, "Walk key", "wdTpKeyOn")
+	keybind(p, "Key", "wdTpKey")
+	local tpLabel = readout("Walking", "Idle")
+	note(p, "Finds a path around rocks and buildings and walks you to the nearest one at normal speed, stopping right beside it. Next goes to the following one, so you can work through every node that has loaded. Moving yourself, or pressing Stop, cancels it. The game pulls you back after long teleports, so this walks instead.")
+
 	section(p, "Loot")
 	switch(p, "Supply crates", "wdLoot")
 	switch(p, "Barrels", "wdBarrels")
@@ -7670,6 +7682,93 @@ local function buildWorld(p)
 			end
 		end
 	end
+
+	-- teleport: nearest first, then work outwards
+	local TP_KINDS = { Sulfur = "sulfur_node", Metal = "metal_node" }
+	local visited = {}
+	local function candidates()
+		local list = {}
+		local want = TP_KINDS[Settings.wdTpTarget]
+		local folder = want and workspace:FindFirstChild("Nodes") or workspace:FindFirstChild("Loot")
+		for _, inst in ipairs(folder and folder:GetChildren() or {}) do
+			local ok
+			if want then ok = inst:GetAttribute("NodeKind") == want and inst:GetAttribute("State") ~= "empty" and inst:GetAttribute("State") ~= "depleted"
+			else ok = inst:GetAttribute("Kind") == "supply_crate" and inst:GetAttribute("State") == "full" end
+			local part = ok and anchorOf(inst)
+			if part then table.insert(list, { inst, part }) end
+		end
+		return list
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local PathfindingService = game:GetService("PathfindingService")
+	local walkToken = 0
+	function stopWalk()
+		walkToken += 1
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local root = myRoot()
+		if hum and root then hum:MoveTo(root.Position) end
+		tpLabel.Text = "Idle"
+	end
+	-- walk a path at normal speed; give up on this run if a newer one starts or you steer yourself
+	local function walkPath(token, hum, root, goal, name)
+		local path = PathfindingService:CreatePath({ AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 6 })
+		local ok = pcall(function() path:ComputeAsync(root.Position, goal) end)
+		local points = ok and path.Status == Enum.PathStatus.Success and path:GetWaypoints() or { { Position = goal, Action = Enum.PathWaypointAction.Walk } }
+		for i, point in ipairs(points) do
+			if token ~= walkToken or hum.Health <= 0 or not root.Parent then return end
+			if i > 1 or #points == 1 then
+				if point.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+				hum:MoveTo(point.Position)
+				local started = os.clock()
+				while token == walkToken and (Vector3.new(root.Position.X - point.Position.X, 0, root.Position.Z - point.Position.Z)).Magnitude > 3 do
+					if os.clock() - started > 4 then hum.Jump = true; hum:MoveTo(point.Position); started = os.clock() end
+					if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.D) then
+						stopWalk()
+						return
+					end
+					tpLabel.Text = string.format("%s, %d studs", name, math.floor((root.Position - goal).Magnitude))
+					task.wait(0.1)
+				end
+			end
+		end
+		if token == walkToken then tpLabel.Text = "Arrived at " .. name:lower() end
+	end
+	function teleport(skipVisited, fresh)
+		if fresh then table.clear(visited) end
+		local char = LocalPlayer.Character
+		local root = myRoot()
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not root or not hum or hum.Health <= 0 then return toast("Respawn first") end
+		local list = candidates()
+		for _, c in ipairs(list) do c.d = (c[2].Position - root.Position).Magnitude end
+		table.sort(list, function(a, b) return a.d < b.d end)
+		local pick
+		for _, c in ipairs(list) do
+			if c.d > 12 and not (skipVisited and visited[c[1]]) then pick = c break end
+		end
+		if not pick and skipVisited and next(visited) then
+			table.clear(visited) -- went through them all, start over
+			for _, c in ipairs(list) do if c.d > 12 then pick = c break end end
+		end
+		if not pick then return toast("No " .. Settings.wdTpTarget:lower() .. " loaded nearby") end
+		visited[pick[1]] = true
+		local target = pick[2].Position
+		local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
+		local side = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(1, 0, 0)
+		local reach = math.max(pick[2].Size.X, pick[2].Size.Z) / 2 + 3
+		params.FilterDescendantsInstances = { char, pick[1], ROOT }
+		local hit = workspace:Raycast(target + side * reach + Vector3.new(0, 60, 0), Vector3.new(0, -200, 0), params)
+		local goal = hit and hit.Position or (target + side * reach)
+		walkToken += 1
+		local token = walkToken
+		tpLabel.Text = string.format("%s, %d studs", Settings.wdTpTarget, math.floor(pick.d))
+		task.spawn(walkPath, token, hum, root, goal, Settings.wdTpTarget)
+	end
+	connect(UserInputService.InputBegan, function(input, processed)
+		if processed or not Settings.wdTpKeyOn or UserInputService:GetFocusedTextBox() then return end
+		if inputName(input) == Settings.wdTpKey then teleport(true) end
+	end)
 
 	task.spawn(function()
 		while hookState.alive do
