@@ -272,6 +272,13 @@ local Settings = {
 	wdTpTarget = "Sulfur",
 	wdTpKeyOn = false,
 	wdTpKey = "J",
+	seFarm = false,
+	seTarget = "Best value",
+	seSkipAwake = true,
+	seHatch = false,
+	seUpgrade = false,
+	seEggEsp = false,
+	seGuardEsp = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4282,7 +4289,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -7824,8 +7831,425 @@ local function buildWorld(p)
 	end)
 end
 
+local function buildStealAnEgg(p)
+	local RS = game:GetService("ReplicatedStorage")
+	local PathfindingService = game:GetService("PathfindingService")
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+	local function every(key, seconds, job)
+		task.spawn(function()
+			while hookState.alive do
+				if Settings[key] then pcall(job) end
+				task.wait(seconds)
+			end
+		end)
+	end
+	local function need(path)
+		local inst = RS
+		for part in path:gmatch("[^%.]+") do inst = inst and inst:FindFirstChild(part) end
+		local ok, mod = pcall(require, inst)
+		return ok and mod or nil
+	end
+	local EggState = need("Client.EggState")
+	local PlotState = need("Client.PlotState")
+	local SlotId = need("Shared.Util.AreaEggSlotIdentity")
+	local Assets = need("Data.Assets")
+	local Save = need("Shared.Save")
+	local BaseUpgrade = need("Client.BaseUpgrade")
+	if not (EggState and PlotState and Assets) then
+		section(p, "Steal An Egg")
+		readout("Status", "Game modules not found")
+		return
+	end
+
+	local SUFFIX = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, Q = 1e15 }
+	local function short(n)
+		n = tonumber(n) or 0
+		for _, s in ipairs({ { 1e15, "Q" }, { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }) do
+			if n >= s[1] then return (string.format("%.2f", n / s[1]):gsub("%.?0+$", "")) .. s[2] end
+		end
+		return tostring(math.floor(n))
+	end
+	local function asset(cat) return Assets.Directory and Assets.Directory[cat] end
+	local function earning(e)
+		local a = asset(e.AssetCategory)
+		local base = a and tonumber(a.EarningRate) or 0
+		local mult = e.BaseMutation == "Golden" and 2 or e.BaseMutation == "Silver" and 1.5 or 1
+		local count = 0
+		for _ in pairs(e.Mutations or {}) do count += 1 end
+		return base * mult * (1 + count * 0.25)
+	end
+	local function mySpeed()
+		local ls = LocalPlayer:FindFirstChild("leaderstats")
+		local v = ls and ls:FindFirstChild("Speed")
+		return v and tonumber(v.Value) or 0
+	end
+	local function guardAreas()
+		local world = workspace:FindFirstChild("World")
+		local areas = world and world:FindFirstChild("Areas")
+		return areas and areas:FindFirstChild("GuardAreas")
+	end
+	-- the speed each area asks for, read off the sign at its entrance
+	local required, requiredAt = {}, 0
+	local function requirements()
+		if os.clock() - requiredAt < 10 and next(required) then return required end
+		requiredAt = os.clock()
+		local folder = guardAreas()
+		for _, area in ipairs(folder and folder:GetChildren() or {}) do
+			local sign = area:FindFirstChild("RequiredSpeedSign")
+			local label = sign and sign:FindFirstChild("Speed", true)
+			local text = label and label:IsA("TextLabel") and label.Text:gsub(",", "") or ""
+			local num, suf = text:match("([%d%.]+)%s*(%a?)")
+			if num then required[area.Name] = tonumber(num) * (SUFFIX[suf:upper()] or 1) end
+		end
+		return required
+	end
+	local function guardOf(areaId)
+		local folder = guardAreas()
+		local area = folder and folder:FindFirstChild(areaId)
+		return area and area:FindFirstChild("Guard")
+	end
+
+	section(p, "Auto steal")
+	switch(p, "Auto steal eggs", "seFarm")
+	segmented(p, "Go for", "seTarget", { "Best value", "Nearest" })
+	switch(p, "Skip eggs with an awake guard", "seSkipAwake")
+	local statusLabel = readout("Status", "Idle")
+	local targetLabel = readout("Target", "None")
+	local tallyLabel = readout("This session", "0 stolen, 0 planted, 0 caught")
+	local speedLabel = readout("Your speed", "-")
+	note(p, "Walks to the best egg you're fast enough to carry home, steals it, walks back to your base and plants it, then goes again. Only areas whose speed sign you meet are picked, so the guard can't catch you. Moving yourself turns the farm off.")
+
+	section(p, "Base")
+	switch(p, "Auto hatch grown eggs", "seHatch")
+	switch(p, "Auto upgrade base", "seUpgrade")
+	local baseLabel = readout("Eggs on base", "-")
+	note(p, "Hatches every egg on your base as soon as it's grown. Base upgrades are bought with in-game cash whenever you can afford the next tier.")
+
+	section(p, "ESP")
+	switch(p, "Egg ESP", "seEggEsp")
+	switch(p, "Guard ESP", "seGuardEsp")
+	note(p, "Egg tags show the pet, its rarity and earnings, and the speed its area needs (red when you're too slow). Guard tags show whether each guard is asleep, waking or chasing.")
+
+	local stats = { stolen = 0, planted = 0, caught = 0 }
+	local function tally()
+		tallyLabel.Text = string.format("%d stolen, %d planted, %d caught", stats.stolen, stats.planted, stats.caught)
+	end
+	local skip = {} -- uid -> time it can be tried again
+
+	local function pick(root)
+		local reqs = requirements()
+		local speed = mySpeed()
+		local now = os.clock()
+		local best, bestScore
+		local field = EggState.ReadFieldEggs()
+		for uid, e in pairs(field and field.Records or {}) do
+			local req = reqs[e.AreaId]
+			local fastEnough = req and speed >= req
+			local guard = guardOf(e.AreaId)
+			local awake = guard and guard:GetAttribute("GuardState") ~= "Sleeping"
+			if e.State == "Slot" and fastEnough and (skip[uid] or 0) < now and not (Settings.seSkipAwake and awake) then
+				local d = (e.BottomCFrame.Position - root.Position).Magnitude
+				local score = Settings.seTarget == "Nearest" and -d or earning(e) - d * 1e-6
+				if not bestScore or score > bestScore then best, bestScore = e, score end
+			end
+		end
+		return best
+	end
+
+	local walkToken = 0
+	local function steer()
+		return UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.A)
+			or UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.D)
+	end
+	-- walk at normal speed until within reach of goal; abort() ends the trip early
+	local function walk(token, goal, reach, abort)
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = myRoot()
+		if not hum or not root then return false end
+		local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 6 })
+		local ok = pcall(function() path:ComputeAsync(root.Position, goal) end)
+		local points = ok and path.Status == Enum.PathStatus.Success and path:GetWaypoints() or {}
+		table.insert(points, { Position = goal, Action = Enum.PathWaypointAction.Walk })
+		for i, point in ipairs(points) do
+			if i > 1 or #points == 1 then
+				if point.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+				hum:MoveTo(point.Position)
+				local started = os.clock()
+				while (Vector3.new(root.Position.X - point.Position.X, 0, root.Position.Z - point.Position.Z)).Magnitude > 3 do
+					if token ~= walkToken or not Settings.seFarm or hum.Health <= 0 or not root.Parent then return false end
+					if steer() then
+						Settings.seFarm = false
+						toast("Auto steal off, you took over")
+						return false
+					end
+					if abort and abort() then return false end
+					if (root.Position - goal).Magnitude <= reach then return true end
+					if os.clock() - started > 4 then hum.Jump = true; hum:MoveTo(point.Position); started = os.clock() end
+					task.wait(0.1)
+				end
+			end
+		end
+		return (root.Position - goal).Magnitude <= reach + 3
+	end
+
+	-- a free spot on your pet area, found by casting straight down onto it
+	local function plantSpot(plot)
+		local area = plot.PetArea
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Include
+		params.FilterDescendantsInstances = { area }
+		for _ = 1, 12 do
+			local off = Vector3.new((math.random() - 0.5) * area.Size.X * 0.8, 0, (math.random() - 0.5) * area.Size.Z * 0.8)
+			local hit = workspace:Raycast((area.CFrame * CFrame.new(off)).Position + Vector3.new(0, 25, 0), Vector3.new(0, -80, 0), params)
+			if hit and hit.Instance == area then return hit.Position end
+		end
+		return nil
+	end
+
+	local function plant(plot)
+		local carry = EggState.ReadCarryState()
+		if not (carry and carry.IsCarrying and carry.Uid) then return false, "not carrying" end
+		local why
+		for _ = 1, 4 do
+			local spot = plantSpot(plot)
+			if spot then
+				local ok, err = EggState.PlantEgg(carry.Uid, plot.CenterPoint.CFrame:ToObjectSpace(CFrame.new(spot)))
+				if ok then return true end
+				why = err
+			end
+			task.wait(0.2)
+		end
+		return false, why
+	end
+
+	local function goHome(token)
+		local plot = PlotState.ResolvePlot()
+		if not plot or not plot.PetArea then return false, "base not found" end
+		statusLabel.Text = "Carrying it home"
+		local caught = false
+		local arrived = walk(token, plot.PetArea.Position, math.max(plot.PetArea.Size.X, plot.PetArea.Size.Z) / 2 - 2, function()
+			local c = EggState.ReadCarryState()
+			caught = not (c and c.IsCarrying)
+			return caught
+		end)
+		if caught then return false, "caught" end
+		if not arrived then return false end
+		return plant(plot)
+	end
+
+	local function runOnce(token)
+		local root = myRoot()
+		if not root then return task.wait(1) end
+		local carry = EggState.ReadCarryState()
+		if carry and carry.IsCarrying then -- already holding one, take it home first
+			local ok, why = goHome(token)
+			if ok then stats.planted += 1; statusLabel.Text = "Planted" elseif why == "caught" then stats.caught += 1 end
+			tally()
+			return
+		end
+		speedLabel.Text = short(mySpeed())
+		local egg = pick(root)
+		if not egg then
+			statusLabel.Text = "No egg you can outrun the guard with"
+			targetLabel.Text = "None"
+			return task.wait(2)
+		end
+		local a = asset(egg.AssetCategory)
+		local name = a and a.DisplayName or egg.AssetCategory
+		targetLabel.Text = string.format("%s, %s/s", name, short(earning(egg)))
+		statusLabel.Text = "Walking to " .. egg.AreaId
+		local uid = egg.Uid
+		local reached = walk(token, egg.BottomCFrame.Position, 5, function()
+			local now = EggState.ReadFieldEgg and EggState.ReadFieldEgg(uid)
+			return not now or now.State ~= "Slot" -- somebody else took it
+		end)
+		if not reached then
+			skip[uid] = os.clock() + 15
+			return
+		end
+		local key = SlotId and SlotId.LooksLikeFirstAreaUid(uid) and SlotId.SlotKey(egg.AreaId, egg.NestId) or nil
+		local ok, why = EggState.CarryFieldEgg(uid, key)
+		if not ok then
+			skip[uid] = os.clock() + 30
+			statusLabel.Text = "Steal denied" .. (why and (": " .. tostring(why)) or "")
+			return task.wait(0.5)
+		end
+		stats.stolen += 1
+		tally()
+		local planted, err = goHome(token)
+		if planted then
+			stats.planted += 1
+			statusLabel.Text = "Planted " .. name
+		elseif err == "caught" then
+			stats.caught += 1
+			skip[uid] = os.clock() + 60
+			statusLabel.Text = "Guard caught you, skipping " .. egg.AreaId .. " for a bit"
+		elseif err then
+			statusLabel.Text = "Couldn't plant: " .. tostring(err)
+			task.wait(3)
+		end
+		tally()
+	end
+
+	task.spawn(function()
+		local wasOn = false
+		while hookState.alive do
+			if Settings.seFarm then
+				if not wasOn then walkToken += 1 end
+				wasOn = true
+				local ok, err = pcall(runOnce, walkToken)
+				if not ok then statusLabel.Text = "Error: " .. tostring(err):sub(1, 60); task.wait(2) end
+			else
+				if wasOn then
+					walkToken += 1
+					local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+					local root = myRoot()
+					if hum and root then hum:MoveTo(root.Position) end
+					statusLabel.Text = "Idle"
+				end
+				wasOn = false
+			end
+			task.wait(0.2)
+		end
+	end)
+
+	local function myEggs()
+		for _, owner in pairs(EggState.ReadOwnedEggs() or {}) do
+			if owner.OwnerUserId == LocalPlayer.UserId then return owner.Records or {} end
+		end
+		return {}
+	end
+	every("seHatch", 2, function()
+		for uid in pairs(myEggs()) do
+			if EggState.IsReadyToHatch(uid) then
+				local ok = EggState.BeginHatch(uid)
+				if ok then
+					task.wait(0.6)
+					EggState.FinishHatch(uid)
+				end
+			end
+		end
+	end)
+	every("seUpgrade", 3, function()
+		local save = Save and Save.Await(LocalPlayer)
+		if save and BaseUpgrade and BaseUpgrade.IsNextTierAffordable(save) then BaseUpgrade.PurchaseNextTier() end
+	end)
+
+	-- ESP: field eggs (anchored to attachments, since they're drawn client side) and guards
+	local folder = new("Folder", { Name = "VigilSteal", Parent = ROOT })
+	local tags = {}
+	local function makeTag(key, adornee, colour)
+		local gui = new("BillboardGui", {
+			Adornee = adornee, AlwaysOnTop = true, Size = UDim2.fromOffset(170, 46), StudsOffset = Vector3.new(0, 3, 0),
+			LightInfluence = 0, MaxDistance = math.huge, ResetOnSpawn = false, Parent = folder,
+		})
+		local title = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, FontFace = Tokens.fontStrong, TextSize = 13,
+			TextColor3 = colour, TextStrokeTransparency = 0.45, Text = "", Parent = gui,
+		})
+		local line2 = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 15), Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1, FontFace = Tokens.mono,
+			TextSize = 11, TextColor3 = Color3.fromRGB(230, 230, 230), TextStrokeTransparency = 0.45, Text = "", Parent = gui,
+		})
+		local line3 = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 29), Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1, FontFace = Tokens.mono,
+			TextSize = 11, TextColor3 = Color3.fromRGB(230, 230, 230), TextStrokeTransparency = 0.45, Text = "", Parent = gui,
+		})
+		local tag = { gui = gui, title = title, line2 = line2, line3 = line3 }
+		tags[key] = tag
+		return tag
+	end
+	local function dropTag(key)
+		local tag = tags[key]
+		if not tag then return end
+		tag.gui:Destroy()
+		if tag.att then tag.att:Destroy() end
+		tags[key] = nil
+	end
+	local GUARD_COLOURS = {
+		Sleeping = Color3.fromRGB(120, 220, 140), Waking = Color3.fromRGB(255, 200, 80),
+		Chasing = Color3.fromRGB(255, 90, 90), ReturningHome = Color3.fromRGB(150, 180, 255),
+	}
+	task.spawn(function()
+		while hookState.alive do
+			local shown = {}
+			local root = myRoot()
+			local from = root and root.Position or Vector3.zero
+			if Settings.seEggEsp then
+				local reqs = requirements()
+				local speed = mySpeed()
+				local field = EggState.ReadFieldEggs()
+				for uid, e in pairs(field and field.Records or {}) do
+					if e.State == "Slot" then
+						shown[uid] = true
+						local a = asset(e.AssetCategory)
+						local rarity = a and a.Rarity
+						local colour = rarity and rarity.Color or Color3.new(1, 1, 1)
+						local tag = tags[uid]
+						if not tag then
+							local att = Instance.new("Attachment")
+							att.Name = "VigilEgg"
+							att.Parent = workspace.Terrain
+							tag = makeTag(uid, att, colour)
+							tag.att = att
+						end
+						tag.att.WorldPosition = e.BottomCFrame.Position
+						tag.title.Text = (a and a.DisplayName or e.AssetCategory) .. (e.BaseMutation and e.BaseMutation ~= "" and (" (" .. e.BaseMutation .. ")") or "")
+						tag.title.TextColor3 = colour
+						tag.line2.Text = string.format("%s  %s/s  %dm", rarity and rarity.DisplayName or "?", short(earning(e)), math.floor((e.BottomCFrame.Position - from).Magnitude))
+						local req = reqs[e.AreaId]
+						tag.line3.Text = req and ("needs " .. short(req) .. " speed") or e.AreaId
+						tag.line3.TextColor3 = (req and speed < req) and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(140, 230, 150)
+					end
+				end
+			end
+			if Settings.seGuardEsp then
+				local guards = guardAreas()
+				for _, area in ipairs(guards and guards:GetChildren() or {}) do
+					local guard = area:FindFirstChild("Guard")
+					local part = guard and (guard.PrimaryPart or guard:FindFirstChildWhichIsA("BasePart", true))
+					if part then
+						shown[guard] = true
+						local state = tostring(guard:GetAttribute("GuardState") or "?")
+						local colour = GUARD_COLOURS[state] or Color3.new(1, 1, 1)
+						local tag = tags[guard] or makeTag(guard, part, colour)
+						if tag.gui.Adornee ~= part then tag.gui.Adornee = part end
+						tag.title.Text = area.Name .. " guard"
+						tag.title.TextColor3 = colour
+						local target = tonumber(guard:GetAttribute("TargetPlayer"))
+						local who = target and Players:GetPlayerByUserId(target)
+						tag.line2.Text = state .. (who and (" " .. (who == LocalPlayer and "you" or who.DisplayName)) or "")
+						tag.line3.Text = string.format("%dm", math.floor((part.Position - from).Magnitude))
+					end
+				end
+			end
+			for key in pairs(tags) do
+				if not shown[key] then dropTag(key) end
+			end
+			if Settings.seHatch or Settings.seFarm or Settings.seUpgrade then
+				local n, ready = 0, 0
+				for uid in pairs(myEggs()) do
+					n += 1
+					if EggState.IsReadyToHatch(uid) then ready += 1 end
+				end
+				baseLabel.Text = string.format("%d, %d ready", n, ready)
+			end
+			task.wait(0.5)
+		end
+		for key in pairs(tags) do dropTag(key) end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Steal An Egg", gameId = 10563114921, placeId = 107778070777162, build = buildStealAnEgg },
 	{ name = "World", gameId = 10771328092, placeId = 124605577845364, build = buildWorld },
 	{ name = "Deep Fishing", gameId = 10526853622, placeId = 132239307080610, build = buildDeepFishing },
 	{ name = "FISH RNG", gameId = 10773682935, placeId = 97131604622053, build = buildFishRng },
