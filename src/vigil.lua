@@ -279,6 +279,17 @@ local Settings = {
 	seUpgrade = false,
 	seEggEsp = false,
 	seGuardEsp = false,
+	ohAtm = false,
+	ohAtmSkipBusy = true,
+	ohCashSweep = true,
+	ohAtmMinHealth = 0,
+	ohChestKind = "Large chest",
+	ohChestAuto = false,
+	ohChestCrack = true,
+	ohChestLoot = true,
+	ohAtmEsp = false,
+	ohChestEsp = false,
+	ohCashEsp = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4289,7 +4300,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "ohAtm", "ohChestAuto", "ohAtmEsp", "ohChestEsp", "ohCashEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -8247,8 +8258,447 @@ local function buildStealAnEgg(p)
 	end)
 end
 
+local function buildOhio(p)
+	local RS = game:GetService("ReplicatedStorage")
+	local VIM = game:GetService("VirtualInputManager")
+	local function readout(label, text)
+		return bind(new("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.new(0.65, -16, 0, 18),
+			BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = Tokens.text.small,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = text, Parent = (row(p, label)),
+		}), "TextColor3", "muted")
+	end
+	local okLoad, Load = pcall(function() return require(RS.devv).load end)
+	local inv = okLoad and Load and select(2, pcall(function() return Load("v3item").inventory end))
+	local function entities(name)
+		local g = workspace:FindFirstChild("Game")
+		local e = g and g:FindFirstChild("Entities")
+		return e and e:FindFirstChild(name)
+	end
+	if type(inv) ~= "table" or not workspace:FindFirstChild("ATMs") then
+		section(p, "Ohio")
+		readout("Status", "Game modules not found")
+		return
+	end
+
+	local function comma(n)
+		local s = tostring(math.floor(tonumber(n) or 0))
+		return (s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+	end
+	local function earned() return tonumber(LocalPlayer:GetAttribute("moneyEarned")) or 0 end
+	local function partOf(m)
+		return m and (m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true))
+	end
+	local function hum()
+		local c = LocalPlayer.Character
+		return c and c:FindFirstChildOfClass("Humanoid")
+	end
+	local function alive()
+		local h, r = hum(), myRoot()
+		return h and r and h.Health > 1
+	end
+	local function othersNear(pos, radius)
+		for _, plr in ipairs(Players:GetPlayers()) do
+			local r = plr ~= LocalPlayer and rootOf(plr.Character)
+			if r and (r.Position - pos).Magnitude < radius then return true end
+		end
+		return false
+	end
+	-- stand on the ground at pos, facing look
+	local groundParams = RaycastParams.new()
+	groundParams.FilterType = Enum.RaycastFilterType.Exclude
+	local function stand(pos, look, ignore)
+		local root = myRoot()
+		if not root then return end
+		groundParams.FilterDescendantsInstances = { LocalPlayer.Character, ignore, ROOT }
+		local hit = workspace:Raycast(pos + Vector3.new(0, 8, 0), Vector3.new(0, -30, 0), groundParams)
+		local y = hit and hit.Position.Y + 3 or pos.Y
+		local at = Vector3.new(pos.X, y, pos.Z)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.CFrame = CFrame.lookAt(at, Vector3.new(look.X, y, look.Z))
+	end
+	local function equip(name)
+		local item = inv.getFromName(name)
+		if not item then return false end
+		local cur = inv.getEquipped()
+		if cur and cur.name == name then return true end
+		pcall(inv.unequipAll)
+		task.wait(0.1)
+		return (pcall(inv.setEquipped, item.guid))
+	end
+	-- a spot on screen with none of the game's or Vigil's buttons under it, for punch clicks
+	local function freeSpot()
+		local vp = workspace.CurrentCamera.ViewportSize
+		local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+		for _, f in ipairs({ { 0.5, 0.62 }, { 0.3, 0.5 }, { 0.7, 0.5 }, { 0.5, 0.3 }, { 0.2, 0.75 }, { 0.8, 0.75 } }) do
+			local x, y = vp.X * f[1], vp.Y * f[2]
+			local blocked = false
+			for _, g in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+				if g.Visible and (g:IsA("GuiButton") or g:IsA("TextBox")) then blocked = true break end
+			end
+			-- and keep clear of Vigil's own window
+			for _, g in ipairs(ROOT:GetDescendants()) do
+				if blocked then break end
+				if g:IsA("GuiObject") and g.Visible and g.AbsoluteSize.X > 40 then
+					local pos, size = g.AbsolutePosition, g.AbsoluteSize
+					if x >= pos.X and x <= pos.X + size.X and y >= pos.Y and y <= pos.Y + size.Y then blocked = true end
+				end
+			end
+			if not blocked then return x, y end
+		end
+		return vp.X * 0.5, vp.Y * 0.62
+	end
+	local function click()
+		local x, y = freeSpot()
+		VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.05)
+		VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+	end
+	-- pick up every cash bundle (and optionally item) within radius of pos
+	local function collectAround(pos, radius, items)
+		local got = 0
+		for _, folderName in ipairs(items and { "CashBundle", "ItemPickup" } or { "CashBundle" }) do
+			local folder = entities(folderName)
+			for _, m in ipairs(folder and folder:GetChildren() or {}) do
+				local part = partOf(m)
+				if part and m.Parent and (not pos or (part.Position - pos).Magnitude <= radius) and alive() then
+					stand(part.Position, part.Position + Vector3.new(0, 0, 1), m)
+					task.wait(0.12)
+					local cd = m:FindFirstChildWhichIsA("ClickDetector", true)
+					local prompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+					if cd then fireclickdetector(cd) elseif prompt then fireproximityprompt(prompt) end
+					got += 1
+					task.wait(0.12)
+				end
+			end
+		end
+		return got
+	end
+
+	section(p, "ATM farm")
+	switch(p, "Auto rob ATMs", "ohAtm")
+	switch(p, "Skip ATMs with players at them", "ohAtmSkipBusy")
+	switch(p, "Grab all dropped cash between ATMs", "ohCashSweep")
+	slider(p, "Leave if health below", "ohAtmMinHealth", 0, 90, 5, function(v) return v == 0 and "Never" or (v .. " hp") end)
+	local atmStatus = readout("Status", "Idle")
+	local atmTally = readout("This session", "0 ATMs, $0")
+	local atmUp = readout("ATMs up", "-")
+	note(p, "Teleports to the nearest working ATM, punches it open with your fists, picks up the cash it drops and moves to the next one. When every ATM is broken it sweeps up dropped cash while they come back. Moving yourself turns the farm off.")
+
+	section(p, "Large chest")
+	segmented(p, "Go for", "ohChestKind", { "Large chest", "Any chest", "Any safe" })
+	local tpChest -- defined below
+	buttonRow(p, "Teleport", { { "Go now", function() task.spawn(tpChest, true) end } })
+	switch(p, "Auto teleport when one spawns", "ohChestAuto")
+	switch(p, "Crack it with a lockpick", "ohChestCrack")
+	switch(p, "Grab the loot", "ohChestLoot")
+	local chestStatus = readout("Status", "None spawned")
+	note(p, "Large chests spawn around the map a few at a time. Teleports you right in front of one; with a lockpick in your inventory it equips it, cracks the chest and picks up what falls out. Without one you'll need to buy a lockpick first.")
+
+	section(p, "ESP")
+	switch(p, "ATM ESP", "ohAtmEsp")
+	switch(p, "Chest and safe ESP", "ohChestEsp")
+	switch(p, "Dropped cash ESP", "ohCashEsp")
+
+	local stats = { atms = 0, start = earned() }
+	local function tally()
+		atmTally.Text = string.format("%d ATMs, $%s", stats.atms, comma(earned() - stats.start))
+	end
+	-- you've taken over once a movement key stays down for half a second
+	local heldSince
+	local function steered()
+		local down = not UserInputService:GetFocusedTextBox() and (UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.A)
+			or UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.D))
+		if not down then heldSince = nil return false end
+		heldSince = heldSince or os.clock()
+		return os.clock() - heldSince > 0.5
+	end
+	local function hurt()
+		local h = hum()
+		return Settings.ohAtmMinHealth > 0 and h and h.Health < Settings.ohAtmMinHealth
+	end
+
+	local function atmFront(atm)
+		local pp = partOf(atm)
+		local screen = atm:FindFirstChild("Screen")
+		local dir = screen and (screen.Position - pp.Position) or pp.CFrame.LookVector
+		dir = Vector3.new(dir.X, 0, dir.Z)
+		dir = dir.Magnitude > 0.05 and dir.Unit or Vector3.new(pp.CFrame.LookVector.X, 0, pp.CFrame.LookVector.Z).Unit
+		return pp.Position + dir * 3, pp
+	end
+	local function pickAtm()
+		local root = myRoot()
+		local best, bd
+		local up = 0
+		for _, atm in ipairs(workspace.ATMs:GetChildren()) do
+			local pp = partOf(atm)
+			if pp and not atm:GetAttribute("isDestroyed") then
+				up += 1
+				if not (Settings.ohAtmSkipBusy and othersNear(pp.Position, 14)) then
+					local d = (pp.Position - root.Position).Magnitude
+					if not bd or d < bd then best, bd = atm, d end
+				end
+			end
+		end
+		atmUp.Text = string.format("%d of %d", up, #workspace.ATMs:GetChildren())
+		return best
+	end
+
+	local function robAtm(atm)
+		local spot, pp = atmFront(atm)
+		atmStatus.Text = "Robbing " .. tostring(atm:GetAttribute("atmId") or "ATM")
+		stand(spot, pp.Position, atm)
+		task.wait(0.25)
+		equip("Fists")
+		local started = os.clock()
+		while Settings.ohAtm and alive() and not atm:GetAttribute("isDestroyed") and os.clock() - started < 15 do
+			if steered() then
+				Settings.ohAtm = false
+				toast("ATM farm off, you took over")
+				return
+			end
+			if hurt() then
+				Settings.ohAtm = false
+				toast("ATM farm off, health low")
+				return
+			end
+			local root = myRoot()
+			if (root.Position - spot).Magnitude > 6 then stand(spot, pp.Position, atm) end
+			root.CFrame = CFrame.lookAt(root.Position, Vector3.new(pp.Position.X, root.Position.Y, pp.Position.Z))
+			click()
+			task.wait(0.45)
+		end
+		if not atm:GetAttribute("isDestroyed") then return end
+		stats.atms += 1
+		atmStatus.Text = "Picking up the cash"
+		-- the bundles take a moment to drop
+		local waitUntil = os.clock() + 1.5
+		repeat
+			task.wait(0.25)
+			collectAround(pp.Position, 35)
+		until os.clock() > waitUntil
+		tally()
+	end
+
+	task.spawn(function()
+		while hookState.alive do
+			if Settings.ohAtm and alive() then
+				local ok, err = pcall(function()
+					local atm = pickAtm()
+					if atm then
+						robAtm(atm)
+					else
+						atmStatus.Text = "Every ATM is broken, waiting for them"
+						if Settings.ohCashSweep then collectAround(nil, math.huge) end
+						task.wait(2)
+					end
+					if Settings.ohCashSweep and Settings.ohAtm then collectAround(nil, math.huge) end
+					tally()
+				end)
+				if not ok then atmStatus.Text = "Error: " .. tostring(err):sub(1, 60); task.wait(2) end
+			elseif not Settings.ohAtm and atmStatus.Text ~= "Idle" then
+				atmStatus.Text = "Idle"
+			end
+			task.wait(0.2)
+		end
+	end)
+
+	-- chests and safes
+	local KINDS = {
+		["Large chest"] = { "LargeChest" },
+		["Any chest"] = { "LargeChest", "SmallChest" },
+		["Any safe"] = { "LargeChest", "SmallChest", "LargeSafe", "MediumSafe", "SmallSafe", "safe" },
+	}
+	local function promptPos(prompt)
+		local parent = prompt.Parent
+		if parent:IsA("Attachment") then return parent.WorldCFrame end
+		if parent:IsA("BasePart") then return parent.CFrame end
+		local part = partOf(parent)
+		return part and part.CFrame or CFrame.new()
+	end
+	local function findChests()
+		local list = {}
+		for _, name in ipairs(KINDS[Settings.ohChestKind] or KINDS["Large chest"]) do
+			local folder = entities(name)
+			for _, m in ipairs(folder and folder:GetChildren() or {}) do
+				local prompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+				if prompt and prompt.Enabled then table.insert(list, { model = m, prompt = prompt, kind = name }) end
+			end
+		end
+		local root = myRoot()
+		if root then
+			for _, c in ipairs(list) do c.d = (promptPos(c.prompt).Position - root.Position).Magnitude end
+			table.sort(list, function(a, b) return a.d < b.d end)
+		end
+		return list
+	end
+	local busy = false
+	local done = {}
+	local saidAt = 0
+	function tpChest(manual)
+		if busy then return end
+		busy = true
+		saidAt = os.clock()
+		local ok, err = pcall(function()
+			local list = findChests()
+			local pick
+			for _, c in ipairs(list) do
+				if manual or not done[c.model] then pick = c break end
+			end
+			if not pick then
+				chestStatus.Text = "None spawned"
+				if manual then toast("No " .. Settings.ohChestKind:lower() .. " right now") end
+				return
+			end
+			done[pick.model] = true
+			local cf = promptPos(pick.prompt)
+			-- try each side until the game shows its prompt (it needs line of sight)
+			local shown = false
+			local conn = pick.prompt.PromptShown:Connect(function() shown = true end)
+			for _, dir in ipairs({ cf.LookVector, -cf.LookVector, cf.RightVector, -cf.RightVector }) do
+				local flat = Vector3.new(dir.X, 0, dir.Z)
+				if flat.Magnitude > 0.05 then
+					stand(cf.Position + flat.Unit * 4, cf.Position, pick.model)
+					task.wait(0.6)
+					if shown then break end
+				end
+			end
+			conn:Disconnect()
+			chestStatus.Text = "At the " .. (pick.kind == "LargeChest" and "large chest" or pick.kind:lower())
+			if not Settings.ohChestCrack then return end
+			if not inv.getFromName("Lockpick") then
+				chestStatus.Text = "Need a lockpick to crack it"
+				toast("Buy a lockpick to crack chests")
+				return
+			end
+			equip("Lockpick")
+			task.wait(0.3)
+			local before = earned()
+			local cracked = false
+			local c2 = pick.prompt.Triggered:Connect(function() cracked = true end)
+			pick.prompt:InputHoldBegin()
+			task.wait(pick.prompt.HoldDuration + 0.4)
+			pick.prompt:InputHoldEnd()
+			c2:Disconnect()
+			task.wait(1)
+			if not cracked and pick.model.Parent then
+				chestStatus.Text = "Couldn't crack it"
+				return
+			end
+			chestStatus.Text = "Cracked"
+			if Settings.ohChestLoot then
+				task.wait(0.8)
+				collectAround(cf.Position, 25, true)
+				chestStatus.Text = "Looted, +$" .. comma(earned() - before)
+			end
+		end)
+		busy = false
+		saidAt = os.clock()
+		if not ok then chestStatus.Text = "Error: " .. tostring(err):sub(1, 60) end
+	end
+	task.spawn(function()
+		while hookState.alive do
+			if Settings.ohChestAuto and alive() and not Settings.ohAtm then
+				local any = false
+				for _, c in ipairs(findChests()) do if not done[c.model] then any = true break end end
+				if any then tpChest(false) end
+			end
+			task.wait(1)
+		end
+	end)
+
+	-- ESP
+	local folder = new("Folder", { Name = "VigilOhio", Parent = ROOT })
+	local tags = {}
+	local function tagFor(key, part, colour)
+		local tag = tags[key]
+		if tag then
+			if tag.gui.Adornee ~= part then tag.gui.Adornee = part end
+			return tag
+		end
+		local gui = new("BillboardGui", {
+			Adornee = part, AlwaysOnTop = true, Size = UDim2.fromOffset(150, 30), StudsOffset = Vector3.new(0, 3, 0),
+			LightInfluence = 0, MaxDistance = math.huge, ResetOnSpawn = false, Parent = folder,
+		})
+		local title = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, FontFace = Tokens.fontStrong, TextSize = 13,
+			TextColor3 = colour, TextStrokeTransparency = 0.45, Text = "", Parent = gui,
+		})
+		local info = new("TextLabel", {
+			Position = UDim2.fromOffset(0, 15), Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1, FontFace = Tokens.mono,
+			TextSize = 11, TextColor3 = Color3.fromRGB(230, 230, 230), TextStrokeTransparency = 0.45, Text = "", Parent = gui,
+		})
+		tag = { gui = gui, title = title, info = info }
+		tags[key] = tag
+		return tag
+	end
+	local rgb = Color3.fromRGB
+	local SAFE_NAMES = { LargeChest = "Large chest", SmallChest = "Small chest", LargeSafe = "Large safe", MediumSafe = "Medium safe", SmallSafe = "Small safe", safe = "Safe", JewelSafe = "Jewel safe", GoldJewelSafe = "Gold jewel safe" }
+	task.spawn(function()
+		while hookState.alive do
+			local shown = {}
+			local root = myRoot()
+			local from = root and root.Position or Vector3.zero
+			if Settings.ohAtmEsp then
+				for _, atm in ipairs(workspace.ATMs:GetChildren()) do
+					local pp = partOf(atm)
+					if pp then
+						shown[atm] = true
+						local broken = atm:GetAttribute("isDestroyed")
+						local tag = tagFor(atm, pp, broken and rgb(150, 150, 150) or rgb(110, 230, 140))
+						tag.title.Text = broken and "ATM (broken)" or "ATM"
+						tag.title.TextColor3 = broken and rgb(150, 150, 150) or rgb(110, 230, 140)
+						tag.info.Text = string.format("%dm  %s hp", math.floor((pp.Position - from).Magnitude), tostring(atm:GetAttribute("health") or "?"))
+					end
+				end
+			end
+			if Settings.ohChestEsp then
+				for name, label in pairs(SAFE_NAMES) do
+					local f = entities(name)
+					for _, m in ipairs(f and f:GetChildren() or {}) do
+						local part = partOf(m)
+						if part then
+							shown[m] = true
+							local colour = name == "LargeChest" and rgb(255, 205, 70) or rgb(255, 150, 90)
+							local tag = tagFor(m, part, colour)
+							tag.title.Text = label
+							tag.info.Text = string.format("%dm", math.floor((part.Position - from).Magnitude))
+						end
+					end
+				end
+			end
+			if Settings.ohCashEsp then
+				local f = entities("CashBundle")
+				for _, m in ipairs(f and f:GetChildren() or {}) do
+					local part = partOf(m)
+					if part then
+						shown[m] = true
+						local value = m:FindFirstChildWhichIsA("IntValue")
+						local tag = tagFor(m, part, rgb(120, 220, 120))
+						tag.title.Text = "$" .. comma(value and value.Value or 0)
+						tag.info.Text = string.format("%dm", math.floor((part.Position - from).Magnitude))
+					end
+				end
+			end
+			for key, tag in pairs(tags) do
+				if not shown[key] or not key.Parent then
+					tag.gui:Destroy()
+					tags[key] = nil
+				end
+			end
+			if not Settings.ohAtm then pcall(pickAtm) end
+			local n = 0
+			for _, name in ipairs({ "LargeChest" }) do local f = entities(name) n += f and #f:GetChildren() or 0 end
+			if not busy and os.clock() - saidAt > 5 then chestStatus.Text = n > 0 and (n .. " large chest" .. (n == 1 and "" or "s") .. " up") or "None spawned" end
+			task.wait(0.5)
+		end
+		for _, tag in pairs(tags) do tag.gui:Destroy() end
+	end)
+end
+
 -- Every supported game. Adding one here adds it to the list and to auto-detect.
 local Games = {
+	{ name = "Ohio", gameId = 2820580801, placeId = 7239319209, build = buildOhio },
 	{ name = "Steal An Egg", gameId = 10563114921, placeId = 107778070777162, build = buildStealAnEgg },
 	{ name = "World", gameId = 10771328092, placeId = 124605577845364, build = buildWorld },
 	{ name = "Deep Fishing", gameId = 10526853622, placeId = 132239307080610, build = buildDeepFishing },
