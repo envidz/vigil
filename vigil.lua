@@ -7510,11 +7510,46 @@ if not blocked then return x, y end
 end
 return vp.X * 0.5, vp.Y * 0.62
 end
-local function click()
-local x, y = freeSpot()
+local function click(x, y)
+if not x then x, y = freeSpot() end
 VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
 task.wait(0.05)
 VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+local function flatDir(from, to)
+local d = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
+return d.Magnitude > 0.05 and d.Unit or Vector3.new(0, 0, -1)
+end
+local function aimAt(target)
+local root = myRoot()
+local cam = workspace.CurrentCamera
+if not root or not cam then return end
+local dir = flatDir(root.Position, target)
+root.CFrame = CFrame.lookAt(root.Position, root.Position + dir)
+cam.CFrame = CFrame.lookAt(root.Position - dir * 9 + Vector3.new(0, 4, 0), target)
+end
+local function facing(target)
+local root = myRoot()
+if not root then return 0 end
+local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+return look.Magnitude > 0 and look.Unit:Dot(flatDir(root.Position, target)) or 0
+end
+local function screenSpot(target)
+local cam = workspace.CurrentCamera
+local pos, onScreen = cam:WorldToViewportPoint(target)
+if not onScreen or pos.Z <= 0 then return nil end
+local x, y = pos.X, pos.Y + game:GetService("GuiService"):GetGuiInset().Y
+local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+for _, g in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+if g.Visible and (g:IsA("GuiButton") or g:IsA("TextBox")) then return nil end
+end
+for _, g in ipairs(ROOT:GetDescendants()) do
+if g:IsA("GuiObject") and g.Visible and g.AbsoluteSize.X > 40 then
+local a, sz = g.AbsolutePosition, g.AbsoluteSize
+if x >= a.X and x <= a.X + sz.X and y >= a.Y and y <= a.Y + sz.Y then return nil end
+end
+end
+return x, y
 end
 local function collectAround(pos, radius, items)
 local got = 0
@@ -7946,6 +7981,9 @@ local function robAtm(atm)
 local spot, pp = atmFront(atm)
 atmStatus.Text = "Robbing " .. tostring(atm:GetAttribute("atmId") or "ATM")
 stand(spot, pp.Position, atm)
+local h0 = hum()
+if h0 then h0.AutoRotate = false end -- turned back on when this ATM is done
+aimAt(pp.Position)
 task.wait(0.25)
 equip("Fists")
 local started = os.clock()
@@ -7962,10 +8000,18 @@ return
 end
 local root = myRoot()
 if (root.Position - spot).Magnitude > 6 then stand(spot, pp.Position, atm) end
-root.CFrame = CFrame.lookAt(root.Position, Vector3.new(pp.Position.X, root.Position.Y, pp.Position.Z))
-click()
+for _ = 1, 5 do
+aimAt(pp.Position)
+task.wait()
+if facing(pp.Position) > 0.9 then break end
+end
+if facing(pp.Position) > 0.9 then
+click(screenSpot(pp.Position))
+end
 task.wait(0.45)
 end
+local hum0 = hum()
+if hum0 then hum0.AutoRotate = true end
 if not atm:GetAttribute("isDestroyed") then return end
 stats.atms += 1
 atmStatus.Text = "Picking up the cash"
@@ -7982,7 +8028,10 @@ if Settings.ohAtm and alive() then
 local ok, err = pcall(function()
 local atm = pickAtm()
 if atm then
-robAtm(atm)
+local okR, errR = pcall(robAtm, atm)
+local h = hum()
+if h then h.AutoRotate = true end -- robAtm turns it off while punching
+if not okR then error(errR, 0) end
 else
 atmStatus.Text = "Every ATM is broken, waiting for them"
 if Settings.ohCashSweep then collectAround(nil, math.huge) end
@@ -7994,9 +8043,13 @@ end)
 if not ok then atmStatus.Text = "Error: " .. tostring(err):sub(1, 60); task.wait(2) end
 elseif not Settings.ohAtm and atmStatus.Text ~= "Idle" then
 atmStatus.Text = "Idle"
+local h = hum()
+if h then h.AutoRotate = true end
 end
 task.wait(0.2)
 end
+local h = hum()
+if h then h.AutoRotate = true end
 end)
 local KINDS = {
 ["Large chest"] = { "LargeChest" },
