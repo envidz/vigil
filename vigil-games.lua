@@ -8195,7 +8195,7 @@ end
 task.wait(1)
 end
 end)
-local gp = UI.addTab({ id = "gemfarm", icon = "rbxassetid://10723396000", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
+local gp = GAMES_ONLY and UI.addTab({ id = "gemfarm", icon = "rbxassetid://10723396000", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
 if gp then (function()
 local itemsIndex = select(2, pcall(Load, "v3items"))
 local Signal = select(2, pcall(Load, "Signal"))

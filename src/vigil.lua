@@ -9083,7 +9083,8 @@ local function buildOhio(p)
 
 	-- Gem farm: its own tab and one button. It cracks every safe with a lockpick, smashes the
 	-- jewelry cases, keeps only the good pieces and puts the best ones in a gun locker.
-	local gp = UI.addTab({ id = "gemfarm", icon = "rbxassetid://10723396000", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
+	-- only in Vigil Hub (vigil-games.lua), not the main script
+	local gp = GAMES_ONLY and UI.addTab({ id = "gemfarm", icon = "rbxassetid://10723396000", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
 	if gp then (function()
 		local itemsIndex = select(2, pcall(Load, "v3items"))
 		local Signal = select(2, pcall(Load, "Signal"))
