@@ -290,6 +290,7 @@ local Settings = {
 	ohAtmEsp = false,
 	ohChestEsp = false,
 	ohCashEsp = false,
+	ohShopReturn = true,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -8394,6 +8395,246 @@ local function buildOhio(p)
 	switch(p, "Grab the loot", "ohChestLoot")
 	local chestStatus = readout("Status", "None spawned")
 	note(p, "Large chests spawn around the map a few at a time. Teleports you right in front of one; with a lockpick in your inventory it equips it, cracks the chest and picks up what falls out. Without one you'll need to buy a lockpick first.")
+
+	-- Shop: every item the stands sell, with a search and categories down the side
+	section(p, "Shop")
+	do
+		local state = select(2, pcall(Load, "state"))
+		local itemsIndex = select(2, pcall(Load, "v3items"))
+		local function money()
+			return type(state) == "table" and state.data and tonumber(state.data.money) or 0
+		end
+		local CATS = { "All", "Guns", "Melee", "Throwables", "Armor", "Consumables", "Gear" }
+		local FROM = { Gun = "Guns", Melee = "Melee", Throwable = "Throwables", Consumable = "Consumables" }
+		-- name -> { name, cost, ammoCost, cat }, read from the game's item index
+		local catalogue, byName = {}, {}
+		local function buildCatalogue()
+			table.clear(catalogue)
+			table.clear(byName)
+			local typeOf = {}
+			local bin = RS.devv.shared.Indicies.v3items.bin
+			for _, m in ipairs(bin:GetDescendants()) do
+				if m:IsA("ModuleScript") and m.Parent.Name ~= "subtypes" and m.Parent.Name ~= "modified" then typeOf[m.Name] = m.Parent.Name end
+			end
+			for _, stand in ipairs(workspace.ItemsOnSale:GetChildren()) do
+				local name = stand.Name
+				if not byName[name] then
+					local okD, data = pcall(function() return itemsIndex.getItemData(name) end)
+					local cost = okD and type(data) == "table" and tonumber(data.cost)
+					if cost then
+						local kind = typeOf[name] or ""
+						local cat = name:find("Vest") and "Armor" or FROM[kind] or "Gear"
+						local entry = { name = name, cost = cost, ammoCost = data.ammoPurchaseCost, cat = cat }
+						byName[name] = entry
+						table.insert(catalogue, entry)
+					end
+				end
+			end
+			table.sort(catalogue, function(a, b)
+				if a.cat ~= b.cat then return table.find(CATS, a.cat) < table.find(CATS, b.cat) end
+				return a.cost < b.cost
+			end)
+		end
+		pcall(buildCatalogue)
+
+		local cat, query = "All", ""
+		local box = listBox(p)
+		local shell = new("Frame", { Size = UDim2.new(1, 0, 0, 380), BackgroundTransparency = 1, Parent = box })
+
+		-- left bar: search on top, categories under it
+		local side = new("Frame", { Size = UDim2.new(0, 150, 1, 0), BackgroundTransparency = 1, Parent = shell }, {
+			new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 8) }),
+			new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4) }),
+		})
+		local search = new("TextBox", {
+			Size = UDim2.new(1, 0, 0, Tokens.size.control), Text = "", PlaceholderText = "Search items", ClearTextOnFocus = false,
+			FontFace = Tokens.fontRegular, TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, LayoutOrder = 0, Parent = side,
+		}, { round(Tokens.radius.md), padding(0, 10) })
+		bind(search, "BackgroundColor3", "raised")
+		bind(search, "TextColor3", "text")
+		bind(search, "PlaceholderColor3", "muted")
+		new("Frame", { Size = UDim2.new(1, 0, 0, 4), BackgroundTransparency = 1, LayoutOrder = 1, Parent = side })
+		local catButtons = {}
+		local renderList -- defined below
+		for i, name in ipairs(CATS) do
+			local b = new("TextButton", {
+				Size = UDim2.new(1, 0, 0, 28), Text = name, FontFace = Tokens.font, TextSize = Tokens.text.small + 1,
+				TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i + 1, Parent = side,
+			}, { round(Tokens.radius.md), padding(0, 10) })
+			catButtons[name] = b
+			connect(b.Activated, function()
+				cat = name
+				renderList()
+			end)
+			connect(b.MouseEnter, function() if cat ~= name then tween(b, { BackgroundColor3 = P.hover, BackgroundTransparency = 0 }, 0.12) end end)
+			connect(b.MouseLeave, function() if cat ~= name then tween(b, { BackgroundTransparency = 1 }, 0.12) end end)
+		end
+		local cashLabel = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = 11,
+			TextXAlignment = Enum.TextXAlignment.Left, Text = "", LayoutOrder = 99, Parent = side,
+		}, { padding(0, 10) })
+		bind(cashLabel, "TextColor3", "muted")
+		local divider = new("Frame", { Size = UDim2.new(0, 1, 1, -24), Position = UDim2.new(0, 150, 0, 12), BorderSizePixel = 0, Parent = shell })
+		bind(divider, "BackgroundColor3", "divider")
+
+		-- right: the items
+		local list = new("ScrollingFrame", {
+			Size = UDim2.new(1, -151, 1, 0), Position = UDim2.fromOffset(151, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 3, ScrollBarImageTransparency = 0.6, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y, Parent = shell,
+		}, { new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }), new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 8) }) })
+		bind(list, "ScrollBarImageColor3", "text")
+
+		local buying = false
+		local function nearestStand(name)
+			local root = myRoot()
+			local best, bd
+			for _, stand in ipairs(workspace.ItemsOnSale:GetChildren()) do
+				if stand.Name == name then
+					local part = partOf(stand)
+					local d = part and root and (part.Position - root.Position).Magnitude
+					if d and (not bd or d < bd) then best, bd = stand, d end
+				end
+			end
+			return best
+		end
+		-- the game's own purchase dialog, opened from the stand and confirmed
+		local function purchaseDialog()
+			local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+			for _, d in ipairs(pg and pg:GetDescendants() or {}) do
+				if d.Name == "Button1" and d:IsA("GuiButton") and d.Parent and d.Parent:FindFirstChild("UpperLabel") then return d end
+			end
+		end
+		local function buy(entry)
+			if buying then return toast("Still buying the last one") end
+			local owned = inv.getFromName(entry.name)
+			local price = owned and entry.ammoCost or entry.cost
+			if owned and not entry.ammoCost then return toast("You already own the " .. entry.name) end
+			if money() < price then return toast("Need $" .. comma(price - money()) .. " more") end
+			local stand = nearestStand(entry.name)
+			local part = partOf(stand)
+			local root = myRoot()
+			if not part or not root or not alive() then return toast("Can't reach a stand selling that") end
+			buying = true
+			local ok, err = pcall(function()
+				local back = root.CFrame
+				local before = money()
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.CFrame = CFrame.lookAt(part.Position + Vector3.new(0, 2, 4), part.Position)
+				task.wait(0.35)
+				local cd = stand:FindFirstChildWhichIsA("ClickDetector", true)
+				local opened = false
+				for _, c in ipairs(cd and getconnections(cd.MouseClick) or {}) do
+					if c.Function then c:Fire() opened = true break end
+				end
+				local button
+				for _ = 1, 15 do
+					button = purchaseDialog()
+					if button then break end
+					task.wait(0.1)
+				end
+				if opened and button then
+					for _, c in ipairs(getconnections(button.Activated)) do c:Fire() end
+					task.wait(0.8)
+					-- a dialog still up means the game said no; close it the way its Cancel button does
+					local still = purchaseDialog()
+					local cancel = still and still.Parent:FindFirstChild("Button2")
+					if cancel then for _, c in ipairs(getconnections(cancel.Activated)) do c:Fire() end end
+				end
+				if Settings.ohShopReturn then
+					root.AssemblyLinearVelocity = Vector3.zero
+					root.CFrame = back
+				end
+				if money() < before or inv.countItemsNamed(entry.name) > 0 and not owned then
+					toast((owned and "Bought ammo for " or "Bought ") .. entry.name)
+				else
+					toast("Couldn't buy " .. entry.name)
+				end
+			end)
+			buying = false
+			if not ok then toast("Error: " .. tostring(err):sub(1, 50)) end
+			renderList()
+		end
+
+		function renderList()
+			for name, b in pairs(catButtons) do
+				local on = name == cat
+				b.BackgroundTransparency = on and 0 or 1
+				b.BackgroundColor3 = on and P.raised or P.hover
+				b.TextColor3 = on and P.text or P.muted
+			end
+			for _, child in ipairs(list:GetChildren()) do
+				if child:IsA("Frame") then child:Destroy() end
+			end
+			local q = query:lower()
+			local cash = money()
+			local n = 0
+			for _, entry in ipairs(catalogue) do
+				if (cat == "All" or entry.cat == cat) and (q == "" or entry.name:lower():find(q, 1, true)) then
+					n += 1
+					local owned = inv.getFromName(entry.name) ~= nil
+					local price = owned and entry.ammoCost or entry.cost
+					local label = owned and (entry.ammoCost and "Ammo" or "Owned") or "Buy"
+					local canBuy = not (owned and not entry.ammoCost) and price and cash >= price
+					local r = new("Frame", { Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, LayoutOrder = n, Parent = list })
+					if n > 1 then new("Frame", { Size = UDim2.new(1, -16, 0, 1), Position = UDim2.fromOffset(12, 0), BackgroundColor3 = P.divider, BorderSizePixel = 0, Parent = r }) end
+					new("TextLabel", {
+						Size = UDim2.new(1, -120, 0, 18), Position = UDim2.fromOffset(14, 6), BackgroundTransparency = 1, FontFace = Tokens.font,
+						TextSize = Tokens.text.body, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+						TextColor3 = P.text, Text = entry.name, Parent = r,
+					})
+					new("TextLabel", {
+						Size = UDim2.new(1, -120, 0, 14), Position = UDim2.fromOffset(14, 25), BackgroundTransparency = 1, FontFace = Tokens.mono,
+						TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = P.muted,
+						Text = "$" .. comma(price or entry.cost) .. "  " .. entry.cat:lower() .. (owned and "  owned" or ""), Parent = r,
+					})
+					local btn = new("TextButton", {
+						AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(64, 28),
+						Text = label, FontFace = Tokens.font, TextSize = Tokens.text.small, AutoButtonColor = false, BorderSizePixel = 0,
+						BackgroundColor3 = canBuy and P.accent or P.raised, TextColor3 = canBuy and P.onAccent or P.muted, Parent = r,
+					}, { round("full") })
+					pressable(btn)
+					connect(btn.Activated, function()
+						if canBuy then task.spawn(buy, entry) elseif owned and not entry.ammoCost then toast("You already own the " .. entry.name)
+						else toast("Need $" .. comma((price or 0) - money()) .. " more") end
+					end)
+				end
+			end
+			if n == 0 then
+				new("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, LayoutOrder = 1, Parent = list }, {
+					new("TextLabel", {
+						Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundTransparency = 1, FontFace = Tokens.fontRegular,
+						TextSize = Tokens.text.small + 1, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = P.muted,
+						Text = #catalogue == 0 and "The shop hasn't loaded yet" or "Nothing matches that",
+					}),
+				})
+			end
+			cashLabel.Text = "$" .. comma(cash) .. " cash"
+		end
+		connect(search:GetPropertyChangedSignal("Text"), function()
+			query = search.Text
+			renderList()
+		end)
+		onTheme(renderList)
+		renderList()
+		-- keep prices and what you can afford current
+		task.spawn(function()
+			local lastCash, lastCount = money(), 0
+			while hookState.alive do
+				task.wait(1.5)
+				if #catalogue == 0 then pcall(buildCatalogue) end
+				local count = 0
+				for _ in pairs(inv.items or {}) do count += 1 end
+				if money() ~= lastCash or count ~= lastCount or #list:GetChildren() <= 2 then
+					lastCash, lastCount = money(), count
+					if not buying then pcall(renderList) end
+				end
+			end
+		end)
+	end
+	switch(p, "Teleport back after buying", "ohShopReturn")
+	note(p, "Click Buy and it hops to the nearest stand selling that item, buys it through the game's own purchase dialog and brings you back. Owned guns show Ammo instead, which tops up their ammo.")
 
 	section(p, "ESP")
 	switch(p, "ATM ESP", "ohAtmEsp")
