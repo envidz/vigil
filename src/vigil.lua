@@ -587,16 +587,6 @@ local ICONS = {
 
 -- returns the image and a function that tints it
 local function iconImage(id, size, parent)
-	if id == "gemfarm" then -- drawn: a diamond outline
-		local box = new("Frame", { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, ZIndex = 2, Parent = parent })
-		local side = math.floor(size * 0.6)
-		local stroke = new("UIStroke", { Thickness = 1.6 })
-		new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(side, side),
-			Rotation = 45, BackgroundTransparency = 1, ZIndex = 2, Parent = box,
-		}, { stroke, new("UICorner", { CornerRadius = UDim.new(0, 2) }) })
-		return box, function(c) stroke.Color = c end
-	end
 	local image = new("ImageLabel", {
 		Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, Image = ICONS[id], ZIndex = 2, Parent = parent,
 	})
@@ -1401,9 +1391,10 @@ local function layoutGroups()
 end
 layoutGroups()
 
--- a game script can add its own tab right after another one; returns the new page
+-- a game script can add its own tab (with its own icon) right after another one; returns the new page
 function UI.addTab(tab, after)
 	if tabById[tab.id] then return pages[tab.id] end
+	if tab.icon then ICONS[tab.id] = tab.icon end
 	local at = #tabs
 	for i, t in ipairs(tabs) do if t.id == after then at = i end end
 	table.insert(tabs, at + 1, tab)
@@ -9092,7 +9083,7 @@ local function buildOhio(p)
 
 	-- Gem farm: its own tab and one button. It cracks every safe with a lockpick, smashes the
 	-- jewelry cases, keeps only the good pieces and puts the best ones in a gun locker.
-	local gp = UI.addTab({ id = "gemfarm", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
+	local gp = UI.addTab({ id = "gemfarm", icon = "rbxassetid://10723396000", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
 	if gp then (function()
 		local itemsIndex = select(2, pcall(Load, "v3items"))
 		local Signal = select(2, pcall(Load, "Signal"))
