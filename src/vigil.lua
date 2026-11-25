@@ -291,6 +291,11 @@ local Settings = {
 	ohChestEsp = false,
 	ohCashEsp = false,
 	ohShopReturn = true,
+	ohGemMin = 10000,
+	ohGemAuto = false,
+	ohGemGrab = true,
+	ohGemReturn = true,
+	ohGemEsp = false,
 	pcRoll = false,
 	pcBuy = false,
 	pcUpgrade = false,
@@ -4301,7 +4306,7 @@ end
 -- Panic key ----------------------------------------------------------------------
 -- One press hides the menu and turns every feature off; the next press puts them back.
 local PANIC_KEYS = {
-	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "ohAtm", "ohChestAuto", "ohAtmEsp", "ohChestEsp", "ohCashEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+	"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "ohAtm", "ohChestAuto", "ohAtmEsp", "ohChestEsp", "ohCashEsp", "ohGemAuto", "ohGemEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 	"lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 	"noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -8387,7 +8392,7 @@ local function buildOhio(p)
 	note(p, "Teleports to the nearest working ATM, punches it open with your fists, picks up the cash it drops and moves to the next one. When every ATM is broken it sweeps up dropped cash while they come back. Moving yourself turns the farm off.")
 
 	section(p, "Large chest")
-	segmented(p, "Go for", "ohChestKind", { "Large chest", "Any chest", "Any safe" })
+	segmented(p, "Go for", "ohChestKind", { "Large chest", "Any chest", "Jewel safes", "Any safe" })
 	local tpChest -- defined below
 	buttonRow(p, "Teleport", { { "Go now", function() task.spawn(tpChest, true) end } })
 	switch(p, "Auto teleport when one spawns", "ohChestAuto")
@@ -8395,6 +8400,128 @@ local function buildOhio(p)
 	switch(p, "Grab the loot", "ohChestLoot")
 	local chestStatus = readout("Status", "None spawned")
 	note(p, "Large chests spawn around the map a few at a time. Teleports you right in front of one; with a lockpick in your inventory it equips it, cracks the chest and picks up what falls out. Without one you'll need to buy a lockpick first.")
+
+	-- Rare gems: Diamond and up, wherever they are (on the ground, in the jewelry store cases while it's open)
+	section(p, "Rare gems")
+	local gemStatus, gemsNow
+	do
+		local itemsIndex = select(2, pcall(Load, "v3items"))
+		local worth = {}
+		local function valueOf(name)
+			if worth[name] == nil then
+				local okD, data = pcall(function() return itemsIndex.getItemData(name) end)
+				worth[name] = okD and type(data) == "table" and data.consumableType == "Valuable" and tonumber(data.sellPrice) or false
+			end
+			return worth[name] or 0
+		end
+		-- every rare gem you could grab right now, best first: { name, value, part, prompt, where }
+		local function findGems()
+			local list = {}
+			local pickups = entities("ItemPickup")
+			for _, m in ipairs(pickups and pickups:GetChildren() or {}) do
+				local name = m:GetAttribute("itemName")
+				local value = name and valueOf(name) or 0
+				local prompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+				local part = partOf(m)
+				if value >= Settings.ohGemMin and part and prompt then
+					table.insert(list, { name = name, value = value, part = part, prompt = prompt, model = m, where = "on the ground" })
+				end
+			end
+			local cases = workspace:FindFirstChild("GemRobbery") and workspace.GemRobbery:FindFirstChild("JewelryCases")
+			for _, d in ipairs(cases and cases:GetDescendants() or {}) do
+				if d:IsA("ProximityPrompt") and d.Enabled then
+					local item = d.Parent and d.Parent.Parent
+					local name = item and item.Name
+					local value = name and valueOf(name) or 0
+					local part = d.Parent:IsA("BasePart") and d.Parent or partOf(item)
+					if value >= Settings.ohGemMin and part then
+						table.insert(list, { name = name, value = value, part = part, prompt = d, model = item, where = "in the jewelry store" })
+					end
+				end
+			end
+			local root = myRoot()
+			for _, g in ipairs(list) do g.d = root and (g.part.Position - root.Position).Magnitude or 0 end
+			table.sort(list, function(a, b)
+				if a.value ~= b.value then return a.value > b.value end
+				return a.d < b.d
+			end)
+			return list
+		end
+
+		local gemBusy = false
+		local function grabGem(g)
+			local root = myRoot()
+			if not root or not alive() then return false end
+			stand(g.part.Position + Vector3.new(0, 0, 2.5), g.part.Position, g.model)
+			task.wait(0.35)
+			if not Settings.ohGemGrab then return true end
+			local before = inv.countItemsNamed(g.name)
+			g.prompt:InputHoldBegin()
+			task.wait(g.prompt.HoldDuration + 0.25)
+			g.prompt:InputHoldEnd()
+			task.wait(0.6)
+			return inv.countItemsNamed(g.name) > before or not g.model.Parent
+		end
+		local stats = { grabbed = 0, value = 0 }
+		local visited = setmetatable({}, { __mode = "k" })
+		local function goGems(manual)
+			if gemBusy then return end
+			gemBusy = true
+			local ok, err = pcall(function()
+				local list = findGems()
+				if #list == 0 then
+					gemStatus.Text = "None right now"
+					if manual then toast("No gems worth $" .. comma(Settings.ohGemMin) .. "+ right now") end
+					return
+				end
+				local back = myRoot() and myRoot().CFrame
+				for _, g in ipairs(list) do
+					if not (Settings.ohGemAuto or manual) or not alive() then break end
+					if not manual and visited[g.model] then continue end
+					visited[g.model] = true
+					gemStatus.Text = string.format("Going for %s ($%s) %s", g.name, comma(g.value), g.where)
+					if grabGem(g) and Settings.ohGemGrab then
+						stats.grabbed += 1
+						stats.value += g.value
+						toast(string.format("Got %s, worth $%s", g.name, comma(g.value)))
+					end
+					if not Settings.ohGemGrab then break end -- just taking you there
+				end
+				if Settings.ohGemGrab and Settings.ohGemReturn and back and myRoot() then
+					myRoot().AssemblyLinearVelocity = Vector3.zero
+					myRoot().CFrame = back
+				end
+				gemStatus.Text = string.format("%d grabbed, $%s", stats.grabbed, comma(stats.value))
+			end)
+			gemBusy = false
+			if not ok then gemStatus.Text = "Error: " .. tostring(err):sub(1, 60) end
+		end
+
+		slider(p, "Worth at least", "ohGemMin", 10000, 50000, 5000, function(v) return "$" .. comma(v) end)
+		buttonRow(p, "Teleport", { { "Best gem now", function() task.spawn(goGems, true) end } })
+		switch(p, "Auto teleport when one shows up", "ohGemAuto")
+		switch(p, "Pick it up", "ohGemGrab")
+		switch(p, "Teleport back after", "ohGemReturn")
+		gemStatus = readout("Status", "None right now")
+		local gemList = readout("Up now", "-")
+		note(p, "Goes for Diamonds, Diamond Rings, Rollies, Void Gems, Gold Crowns and Dark Matter Gems, the best first, and skips the cheap ones like emeralds and rubies. It checks dropped gems on the ground and the jewelry store cases while they're open. Gold jewel safes hold gems too: pick Jewel safes under Large chest to crack them.")
+
+		task.spawn(function()
+			while hookState.alive do
+				local okL, list = pcall(findGems)
+				if okL then
+					local names = {}
+					for i = 1, math.min(#list, 3) do names[#names + 1] = list[i].name end
+					gemList.Text = #list == 0 and "None" or (table.concat(names, ", ") .. (#list > 3 and (" +" .. (#list - 3)) or ""))
+					local fresh = false
+					for _, g in ipairs(list) do if not visited[g.model] then fresh = true break end end
+					if Settings.ohGemAuto and fresh and not gemBusy and not Settings.ohAtm then task.spawn(goGems, false) end
+				end
+				task.wait(1)
+			end
+		end)
+		gemsNow = findGems -- the ESP below reads this
+	end
 
 	-- Shop: every item the stands sell, with a search and categories down the side
 	section(p, "Shop")
@@ -8640,6 +8767,7 @@ local function buildOhio(p)
 	switch(p, "ATM ESP", "ohAtmEsp")
 	switch(p, "Chest and safe ESP", "ohChestEsp")
 	switch(p, "Dropped cash ESP", "ohCashEsp")
+	switch(p, "Rare gem ESP", "ohGemEsp")
 
 	local stats = { atms = 0, start = earned() }
 	local function tally()
@@ -8748,6 +8876,7 @@ local function buildOhio(p)
 	local KINDS = {
 		["Large chest"] = { "LargeChest" },
 		["Any chest"] = { "LargeChest", "SmallChest" },
+		["Jewel safes"] = { "GoldJewelSafe", "JewelSafe" },
 		["Any safe"] = { "LargeChest", "SmallChest", "LargeSafe", "MediumSafe", "SmallSafe", "safe" },
 	}
 	local function promptPos(prompt)
@@ -8919,6 +9048,15 @@ local function buildOhio(p)
 						tag.title.Text = "$" .. comma(value and value.Value or 0)
 						tag.info.Text = string.format("%dm", math.floor((part.Position - from).Magnitude))
 					end
+				end
+			end
+			if Settings.ohGemEsp and gemsNow then
+				local okG, gems = pcall(gemsNow)
+				for _, g in ipairs(okG and gems or {}) do
+					shown[g.model] = true
+					local tag = tagFor(g.model, g.part, rgb(120, 200, 255))
+					tag.title.Text = g.name
+					tag.info.Text = string.format("$%s  %dm", comma(g.value), math.floor((g.part.Position - from).Magnitude))
 				end
 			end
 			for key, tag in pairs(tags) do
