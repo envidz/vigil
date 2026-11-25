@@ -272,6 +272,7 @@ ohGemAuto = false,
 ohGemGrab = true,
 ohGemReturn = true,
 ohGemEsp = false,
+ohGemFarm = false,
 pcRoll = false,
 pcBuy = false,
 pcUpgrade = false,
@@ -516,6 +517,16 @@ spy = "rbxassetid://10723346959",
 discord = "rbxthumb://type=Asset&id=132364423955781&w=150&h=150",
 }
 local function iconImage(id, size, parent)
+if id == "gemfarm" then -- drawn: a diamond outline
+local box = new("Frame", { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, ZIndex = 2, Parent = parent })
+local side = math.floor(size * 0.6)
+local stroke = new("UIStroke", { Thickness = 1.6 })
+new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(side, side),
+Rotation = 45, BackgroundTransparency = 1, ZIndex = 2, Parent = box,
+}, { stroke, new("UICorner", { CornerRadius = UDim.new(0, 2) }) })
+return box, function(c) stroke.Color = c end
+end
 local image = new("ImageLabel", {
 Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, Image = ICONS[id], ZIndex = 2, Parent = parent,
 })
@@ -1207,17 +1218,46 @@ if id == "spy" then UI.toggleSpy() else selectTab(id) end -- Remote spy has its 
 end)
 end
 local navY = 0
-for _, group in ipairs(GROUPS) do
-bind(new("TextLabel", {
+local navHeaders = {}
+local function layoutGroups()
+navY = 0
+for gi, group in ipairs(GROUPS) do
+navHeaders[gi] = navHeaders[gi] or bind(new("TextLabel", {
 Text = string.upper(group[1]), FontFace = Tokens.mono, TextSize = 10, BackgroundTransparency = 1,
-TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(22, navY), Size = UDim2.fromOffset(160, 20), Parent = navScroll,
+TextXAlignment = Enum.TextXAlignment.Left, Size = UDim2.fromOffset(160, 20), Parent = navScroll,
 }), "TextColor3", "muted")
+navHeaders[gi].Position = UDim2.fromOffset(22, navY)
 navY += 22
 for _, id in ipairs(group[2]) do
+if nav[id] then
+nav[id].y = navY
+nav[id].btn.Position = UDim2.fromOffset(10, navY)
+else
 navItem(id, navY)
+end
 navY += 35
 end
 navY += 12
+end
+if UI.layoutNav then UI.layoutNav() end
+local cur = UI.currentTab and nav[UI.currentTab]
+if cur then navPill.Position = UDim2.fromOffset(10, cur.y) end
+end
+layoutGroups()
+function UI.addTab(tab, after)
+if tabById[tab.id] then return pages[tab.id] end
+local at = #tabs
+for i, t in ipairs(tabs) do if t.id == after then at = i end end
+table.insert(tabs, at + 1, tab)
+tabById[tab.id] = tab
+for _, group in ipairs(GROUPS) do
+local i = table.find(group[2], after)
+if i then table.insert(group[2], i + 1, tab.id) break end
+end
+local p = page(tab.id)
+layoutGroups()
+paintNav()
+return p
 end
 navItem("settings", 0)
 local discordBtn = new("TextButton", {
@@ -1838,6 +1878,7 @@ windowScale.Scale = baseScale
 end)
 end
 end
+UI.setMenuVisible = setMenuVisible -- the gem farm hides the menu while it runs
 local touchOnly = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 connect(closeBtn.Activated, function()
 setMenuVisible(false)
@@ -3753,7 +3794,7 @@ end
 for i = used + 1, #dots do dots[i].Visible = false end
 end
 local PANIC_KEYS = {
-"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "ohAtm", "ohChestAuto", "ohAtmEsp", "ohChestEsp", "ohCashEsp", "ohGemAuto", "ohGemEsp", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
+"spyRecord", "swordForgeTrain", "swordForgeCollect", "swordForgeRewards", "swordForgeEquip", "swordForgeUpgrades", "swordForgeSell", "swordForgeRebirth", "csKillerEsp", "csNpcEsp", "csItemEsp", "mtBuy", "mtCollect", "mtRebirth", "mtRewards", "mtAirdropEsp", "pcRoll", "pcBuy", "pcUpgrade", "pcRewards", "pcEquip", "pcHatch", "pcCollect", "pcBank", "pcEggEsp", "pcGuardEsp", "dgParry", "camFish", "camSell", "camUpgrade", "camRebirth", "camRewards", "agBot", "agChase", "agSplit", "agRespawn", "wsFarm", "wsGroup", "wsWalk", "wsNpcEsp", "wsRespawn", "wsBuyGear", "wsEra", "wsTravel", "wsRebirth", "wsLegends", "frFish", "frSell", "frRods", "frLines", "frRewards", "dfFish", "dfFight", "dfSell", "dfRods", "dfRewards", "dfUpgrade", "dfAchieve", "dfBaitUse", "dfBaitBuy", "dfChests", "dfPotions", "dfEggs", "dfPets", "dfPondCash", "dfIce", "dfIceAuto", "dfIceBuyAuto", "dfIceUpgrades", "wdEsp", "seFarm", "seHatch", "seUpgrade", "seEggEsp", "seGuardEsp", "ohAtm", "ohChestAuto", "ohAtmEsp", "ohChestEsp", "ohCashEsp", "ohGemAuto", "ohGemEsp", "ohGemFarm", "enabled", "aimEnabled", "triggerEnabled", "radarEnabled", "fullbright", "noFog",
 "lockTime", "camFovEnabled", "crosshair", "speedEnabled", "jumpEnabled", "infiniteJump", "fly",
 "noclip", "clickTp", "showModules", "spin", "hitmarker",
 }
@@ -7490,6 +7531,22 @@ pcall(inv.unequipAll)
 task.wait(0.1)
 return (pcall(inv.setEquipped, item.guid))
 end
+local farmOverlay
+local function coveredByVigil(x, y)
+for _, g in ipairs(ROOT:GetDescendants()) do
+if g:IsA("GuiObject") and g.Visible and g.AbsoluteSize.X > 40 then
+local a, sz = g.AbsolutePosition, g.AbsoluteSize
+if x >= a.X and x <= a.X + sz.X and y >= a.Y and y <= a.Y + sz.Y then
+local sg = g:FindFirstAncestorWhichIsA("ScreenGui")
+local counts = sg and sg.Enabled
+if counts and farmOverlay and sg == farmOverlay and not g:IsA("GuiButton") then counts = false end
+if counts and not Holder.Visible and g:IsDescendantOf(Holder) then counts = false end
+if counts then return true end
+end
+end
+end
+return false
+end
 local function freeSpot()
 local vp = workspace.CurrentCamera.ViewportSize
 local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -7499,13 +7556,7 @@ local blocked = false
 for _, g in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
 if g.Visible and (g:IsA("GuiButton") or g:IsA("TextBox")) then blocked = true break end
 end
-for _, g in ipairs(ROOT:GetDescendants()) do
-if blocked then break end
-if g:IsA("GuiObject") and g.Visible and g.AbsoluteSize.X > 40 then
-local pos, size = g.AbsolutePosition, g.AbsoluteSize
-if x >= pos.X and x <= pos.X + size.X and y >= pos.Y and y <= pos.Y + size.Y then blocked = true end
-end
-end
+if not blocked and coveredByVigil(x, y) then blocked = true end
 if not blocked then return x, y end
 end
 return vp.X * 0.5, vp.Y * 0.62
@@ -7543,12 +7594,7 @@ local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
 for _, g in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
 if g.Visible and (g:IsA("GuiButton") or g:IsA("TextBox")) then return nil end
 end
-for _, g in ipairs(ROOT:GetDescendants()) do
-if g:IsA("GuiObject") and g.Visible and g.AbsoluteSize.X > 40 then
-local a, sz = g.AbsolutePosition, g.AbsoluteSize
-if x >= a.X and x <= a.X + sz.X and y >= a.Y and y <= a.Y + sz.Y then return nil end
-end
-end
+if coveredByVigil(x, y) then return nil end
 return x, y
 end
 local function collectAround(pos, radius, items)
@@ -7704,6 +7750,7 @@ end
 end)
 gemsNow = findGems -- the ESP below reads this
 end
+local shopBuy -- name -> buys it from the nearest stand; the gem farm uses it for lockpicks
 section(p, "Shop")
 do
 local state = select(2, pcall(Load, "state"))
@@ -7853,6 +7900,10 @@ end)
 buying = false
 if not ok then toast("Error: " .. tostring(err):sub(1, 50)) end
 renderList()
+end
+shopBuy = function(name)
+if not byName[name] then pcall(buildCatalogue) end
+if byName[name] then buy(byName[name]) end
 end
 function renderList()
 for name, b in pairs(catButtons) do
@@ -8153,6 +8204,505 @@ end
 task.wait(1)
 end
 end)
+local gp = UI.addTab({ id = "gemfarm", title = "Gem farm", sub = "Cracks safes and cases, keeps the good gems and locks them away." }, "thisgame")
+if gp then (function()
+local itemsIndex = select(2, pcall(Load, "v3items"))
+local Signal = select(2, pcall(Load, "Signal"))
+local state = select(2, pcall(Load, "state"))
+local KEEP = 2000
+local SAFES = { "GoldJewelSafe", "JewelSafe", "LargeChest", "LargeSafe", "MediumSafe", "SmallChest", "SmallSafe", "safe" }
+local SAFE_LABEL = { GoldJewelSafe = "gold jewel safe", JewelSafe = "jewel safe", LargeChest = "large chest", SmallChest = "small chest", LargeSafe = "large safe", MediumSafe = "medium safe", SmallSafe = "small safe", safe = "safe" }
+local worth = {}
+local function valueOf(name)
+if type(name) ~= "string" then return 0 end
+if worth[name] == nil then
+local okD, data = pcall(function() return itemsIndex.getItemData(name) end)
+worth[name] = okD and type(data) == "table" and data.consumableType == "Valuable" and tonumber(data.sellPrice) or false
+end
+return worth[name] or 0
+end
+local function cash()
+return type(state) == "table" and state.data and tonumber(state.data.money) or 0
+end
+local function on() return Settings.ohGemFarm and hookState.alive end
+local stats, status = {}, "Idle"
+local function resetStats()
+stats.kept, stats.value, stats.safes, stats.cases, stats.stashed, stats.started = 0, 0, 0, 0, 0, os.clock()
+end
+resetStats()
+local cooldown = setmetatable({}, { __mode = "k" })
+local function ready(key) return not cooldown[key] or os.clock() > cooldown[key] end
+local function rest(key, secs) cooldown[key] = os.clock() + secs end
+local noStash = {}
+local function reach(prompt, model)
+local cf = promptPos(prompt)
+local shown = false
+local conn = prompt.PromptShown:Connect(function() shown = true end)
+local dist = math.clamp((prompt.MaxActivationDistance or 10) - 2, 2.5, 4)
+for _, dir in ipairs({ cf.LookVector, -cf.LookVector, cf.RightVector, -cf.RightVector }) do
+local flat = Vector3.new(dir.X, 0, dir.Z)
+if flat.Magnitude > 0.05 then
+stand(cf.Position + flat.Unit * dist, cf.Position, model)
+task.wait(0.5)
+if shown then break end
+end
+end
+conn:Disconnect()
+return cf
+end
+local function hold(prompt)
+local fired = false
+local conn = prompt.Triggered:Connect(function() fired = true end)
+prompt:InputHoldBegin()
+task.wait((prompt.HoldDuration or 0) + 0.35)
+prompt:InputHoldEnd()
+conn:Disconnect()
+return fired
+end
+local function took(name, before)
+if inv.countItemsNamed(name) > before then
+stats.kept += 1
+stats.value += valueOf(name)
+return true
+end
+return false
+end
+local function grabWorthy(pos, radius, cashToo)
+local got = 0
+for _, folderName in ipairs(cashToo and { "CashBundle", "ItemPickup" } or { "ItemPickup" }) do
+local folder = entities(folderName)
+for _, m in ipairs(folder and folder:GetChildren() or {}) do
+if not on() or not alive() then return got end
+local part = partOf(m)
+local name = folderName == "ItemPickup" and m:GetAttribute("itemName")
+local wanted = folderName == "CashBundle" or valueOf(name) >= KEEP
+if wanted and part and m.Parent and ready(m) and (not pos or (part.Position - pos).Magnitude <= radius) then
+rest(m, 15)
+if name then status = "Picking up a " .. name end
+stand(part.Position, part.Position + Vector3.new(0, 0, 1), m)
+task.wait(0.15)
+local cd = m:FindFirstChildWhichIsA("ClickDetector", true)
+local prompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+if cd then
+fireclickdetector(cd)
+elseif prompt then
+local before = inv.countItemsNamed(name)
+fireproximityprompt(prompt)
+task.wait(0.35)
+took(name, before)
+end
+got += 1
+task.wait(0.1)
+end
+end
+end
+return got
+end
+local function valuables()
+local list = {}
+for guid, it in pairs(inv.items or {}) do
+local v = type(it) == "table" and valueOf(it.name) or 0
+local id = type(it) == "table" and it.guid or guid
+if v >= KEEP and not noStash[id] then
+table.insert(list, { guid = id, name = it.name, value = v, stashed = it.isStashed and true or false })
+end
+end
+table.sort(list, function(a, b) return a.value > b.value end)
+return list
+end
+local function lockerPlan()
+local slots = tonumber(LocalPlayer:GetAttribute("lockerSlots")) or 4
+local used = 0
+pcall(function() used = inv.getNumStashed() end)
+local list = valuables()
+for _, v in ipairs(list) do if v.stashed then used -= 1 end end
+local free = slots - used
+local put, take = {}, {}
+for i, v in ipairs(list) do
+if i <= free and not v.stashed then table.insert(put, v) end
+if i > free and v.stashed then table.insert(take, v) end
+end
+return put, take
+end
+local function stashedCount()
+local n = 0
+for _, v in ipairs(valuables()) do if v.stashed then n += 1 end end
+return n
+end
+local function nearestLocker()
+local folder = workspace:FindFirstChild("Lockers")
+local root = myRoot()
+local best, bd
+for _, l in ipairs(folder and folder:GetChildren() or {}) do
+local prompt = l:FindFirstChildWhichIsA("ProximityPrompt", true)
+local d = prompt and root and (promptPos(prompt).Position - root.Position).Magnitude
+if d and (not bd or d < bd) then best, bd = { model = l, prompt = prompt }, d end
+end
+return best
+end
+local function deposit()
+local put, take = lockerPlan()
+if #put == 0 or type(Signal) ~= "table" then return false end
+local locker = nearestLocker()
+if not locker or not ready(locker.model) then return false end
+status = "Taking the " .. put[1].name .. " to a gun locker"
+reach(locker.prompt, locker.model)
+pcall(inv.unequipAll)
+task.wait(0.15)
+hold(locker.prompt)
+task.wait(0.4)
+for _, v in ipairs(take) do
+pcall(function() Signal.InvokeServer("stashItem", v.guid, true) end)
+task.wait(0.3)
+end
+local any = false
+for _, v in ipairs(put) do
+status = "Locking away the " .. v.name
+local ok, res = pcall(function() return Signal.InvokeServer("stashItem", v.guid, false) end)
+task.wait(0.3)
+local now = inv.get(v.guid)
+if ok and res ~= false and now and now.isStashed then
+stats.stashed += 1
+any = true
+else
+noStash[v.guid] = true -- the game won't take this one
+end
+end
+pcall(function() inv.locker.toggle(false) end)
+pcall(function() inv.backpack.toggle(false) end)
+if not any then rest(locker.model, 20) end
+return true
+end
+local function caseItems(case)
+local list = {}
+for _, d in ipairs(case:GetDescendants()) do
+if d:IsA("ProximityPrompt") then
+local name = valueOf(d.ObjectText) > 0 and d.ObjectText or nil
+local a = d.Parent
+while not name and a and a ~= case do
+if valueOf(a.Name) > 0 then name = a.Name end
+a = a.Parent
+end
+if name and valueOf(name) >= KEEP then table.insert(list, { prompt = d, name = name, value = valueOf(name) }) end
+end
+end
+table.sort(list, function(a, b) return a.value > b.value end)
+return list
+end
+local function nextCase()
+local robbery = workspace:FindFirstChild("GemRobbery")
+local cases = robbery and robbery:FindFirstChild("JewelryCases")
+if not cases then return end
+local best, bv
+for _, c in ipairs(cases:GetDescendants()) do
+if c.Name == "JewelryCase" and c:IsA("Model") and ready(c) then
+local items = caseItems(c)
+if #items > 0 and (not bv or items[1].value > bv) then best, bv = { model = c, items = items }, items[1].value end
+end
+end
+return best
+end
+local function robCase(c)
+rest(c.model, 25)
+local glass = c.model:FindFirstChild("Glass")
+local function intact() return glass and glass.Parent and glass.Transparency < 1 end
+local function open()
+for _, it in ipairs(c.items) do if it.prompt.Parent and it.prompt.Enabled then return true end end
+return false
+end
+if intact() and not open() then
+status = "Smashing the case with the " .. c.items[1].name
+local g = glass.CFrame
+local reachOut = glass.Size.X / 2 + 1.6
+local spot
+for _, sign in ipairs({ 1, -1 }) do
+local try = g.Position + g.RightVector * reachOut * sign
+groundParams.FilterDescendantsInstances = { LocalPlayer.Character, c.model, ROOT }
+if not workspace:Raycast(try, (g.Position - try), groundParams) then spot = try break end
+end
+spot = spot or (g.Position + g.RightVector * reachOut)
+stand(spot, g.Position, c.model)
+local h0 = hum()
+if h0 then h0.AutoRotate = false end
+aimAt(g.Position)
+task.wait(0.25)
+equip("Fists")
+local started = os.clock()
+while on() and alive() and intact() and not open() and os.clock() - started < 10 do
+local root = myRoot()
+if root and (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(spot.X, 0, spot.Z)).Magnitude > 4 then stand(spot, g.Position, c.model) end
+for _ = 1, 5 do
+aimAt(g.Position)
+task.wait()
+if facing(g.Position) > 0.9 then break end
+end
+if facing(g.Position) > 0.9 then click(screenSpot(g.Position)) end
+task.wait(0.45)
+end
+local h1 = hum()
+if h1 then h1.AutoRotate = true end
+task.wait(0.4)
+if intact() and not open() then
+rest(c.model, 90)
+status = "That case wouldn't break"
+return
+end
+stats.cases += 1
+end
+for _, it in ipairs(c.items) do
+if not on() or not alive() then return end
+if it.prompt.Parent and it.prompt.Enabled then
+status = string.format("Taking the %s ($%s)", it.name, comma(it.value))
+local before = inv.countItemsNamed(it.name)
+if not hold(it.prompt) then
+reach(it.prompt, c.model)
+hold(it.prompt)
+end
+task.wait(0.4)
+took(it.name, before)
+end
+end
+end
+local function nextSafe()
+local root = myRoot()
+if not root then return end
+local best, bd
+for _, name in ipairs(SAFES) do
+local folder = entities(name)
+for _, m in ipairs(folder and folder:GetChildren() or {}) do
+local prompt = ready(m) and m:FindFirstChildWhichIsA("ProximityPrompt", true)
+if prompt and prompt.Enabled then
+local pos = promptPos(prompt).Position
+if not othersNear(pos, 12) then
+local d = (pos - root.Position).Magnitude - ((name == "GoldJewelSafe" or name == "JewelSafe") and 100000 or 0)
+if not bd or d < bd then best, bd = { model = m, prompt = prompt, kind = name }, d end
+end
+end
+end
+end
+return best
+end
+local function crack(s)
+rest(s.model, 20)
+status = "Cracking a " .. (SAFE_LABEL[s.kind] or "safe")
+local cf = reach(s.prompt, s.model)
+equip("Lockpick")
+task.wait(0.3)
+if hold(s.prompt) or not s.model.Parent then
+stats.safes += 1
+status = "Looting the " .. (SAFE_LABEL[s.kind] or "safe")
+task.wait(0.9)
+grabWorthy(cf.Position, 25, true)
+task.wait(0.5)
+grabWorthy(cf.Position, 25, true) -- some loot lands late
+else
+rest(s.model, 60)
+end
+end
+local function ensureLockpick()
+if inv.getFromName("Lockpick") then return true end
+if cash() < 100 or not shopBuy then return false end
+status = "Buying a lockpick"
+shopBuy("Lockpick")
+task.wait(0.5)
+return inv.getFromName("Lockpick") ~= nil
+end
+task.spawn(function()
+while hookState.alive do
+if Settings.ohGemFarm then
+if not alive() then
+status = "Waiting to respawn"
+task.wait(1)
+else
+local ok, err = pcall(function()
+if deposit() then return end
+local c = nextCase()
+if c then robCase(c) return end
+if grabWorthy(nil, math.huge, false) > 0 then return end
+if ensureLockpick() then
+local s = nextSafe()
+if s then crack(s) return end
+status = "Waiting for safes to spawn"
+else
+status = "Needs $100 to buy a lockpick"
+end
+task.wait(1)
+end)
+local h = hum()
+if h then h.AutoRotate = true end
+if not ok then
+status = "Error: " .. tostring(err):sub(1, 70)
+task.wait(1.5)
+end
+end
+end
+task.wait(0.15)
+end
+end)
+local overlay = new("ScreenGui", {
+Name = "VigilGemFarm", ResetOnSpawn = false, IgnoreGuiInset = true, Enabled = false,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 9600, Parent = ROOT,
+})
+farmOverlay = overlay
+bind(new("Frame", {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 0.5, BorderSizePixel = 0, Parent = overlay,
+}), "BackgroundColor3", "bg")
+local panel = new("Frame", {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(440, 318),
+BackgroundTransparency = 0.04, BorderSizePixel = 0, Parent = overlay,
+}, { round(Tokens.radius.lg), padding(26, 28, 24, 28) })
+bind(panel, "BackgroundColor3", "card")
+bind(new("UIStroke", { Thickness = Tokens.stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = panel }), "Color", "border")
+local panelScale = new("UIScale", { Parent = panel })
+local dot = bind(new("Frame", {
+Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(0, 4), BorderSizePixel = 0, Parent = panel,
+}, { round("full") }), "BackgroundColor3", "accent")
+bind(new("TextLabel", {
+Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -16, 0, 16), BackgroundTransparency = 1, FontFace = Tokens.mono,
+TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, Text = "GEM FARM ACTIVE", Parent = panel,
+}), "TextColor3", "muted")
+local timeLabel = bind(new("TextLabel", {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(120, 16), BackgroundTransparency = 1,
+FontFace = Tokens.mono, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, Text = "0:00", Parent = panel,
+}), "TextColor3", "muted")
+local worthLabel = bind(new("TextLabel", {
+Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, FontFace = Tokens.fontStrong,
+TextSize = 46, TextXAlignment = Enum.TextXAlignment.Left, Text = "$0", Parent = panel,
+}), "TextColor3", "text")
+local statusLabel = bind(new("TextLabel", {
+Position = UDim2.fromOffset(0, 86), Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, FontFace = Tokens.fontRegular,
+TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Text = "", Parent = panel,
+}), "TextColor3", "muted")
+bind(new("Frame", {
+Position = UDim2.fromOffset(0, 124), Size = UDim2.new(1, 0, 0, 1), BorderSizePixel = 0, Parent = panel,
+}), "BackgroundColor3", "divider")
+local cells = new("Frame", {
+Position = UDim2.fromOffset(0, 140), Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1, Parent = panel,
+}, { new("UIGridLayout", { CellSize = UDim2.new(0.25, 0, 1, 0), CellPadding = UDim2.new(), SortOrder = Enum.SortOrder.LayoutOrder }) })
+local function cell(i, label)
+local f = new("Frame", { BackgroundTransparency = 1, LayoutOrder = i, Parent = cells })
+local value = bind(new("TextLabel", {
+Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1, FontFace = Tokens.fontStrong, TextSize = 22,
+TextXAlignment = Enum.TextXAlignment.Left, Text = "0", Parent = f,
+}), "TextColor3", "text")
+bind(new("TextLabel", {
+Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, FontFace = Tokens.fontRegular,
+TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, Text = label, Parent = f,
+}), "TextColor3", "muted")
+return value
+end
+local keptCell = cell(1, "Gems kept")
+local lockerCell = cell(2, "In locker")
+local safesCell = cell(3, "Safes cracked")
+local casesCell = cell(4, "Cases smashed")
+local stopBtn = pressable(new("TextButton", {
+AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 48), BorderSizePixel = 0,
+AutoButtonColor = false, FontFace = Tokens.fontStrong, TextSize = 16, Text = "Stop gem farm", Parent = panel,
+}, { round(12) }))
+local stopHover = false
+local function paintStop()
+stopBtn.BackgroundColor3 = stopHover and P.hover or P.raised
+stopBtn.TextColor3 = P.danger
+end
+onTheme(paintStop)
+paintStop()
+connect(stopBtn.MouseEnter, function() stopHover = true paintStop() end)
+connect(stopBtn.MouseLeave, function() stopHover = false paintStop() end)
+section(gp, "Ohio")
+local hero = cardOf(gp).frame
+local heroBody = new("Frame", {
+Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = nextOrder(), Parent = hero,
+}, { padding(22, 22, 22, 22), new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8) }) })
+bind(new("TextLabel", {
+Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, FontFace = Tokens.fontStrong, TextSize = 26,
+TextXAlignment = Enum.TextXAlignment.Left, Text = "Gem auto farm", LayoutOrder = 1, Parent = heroBody,
+}), "TextColor3", "text")
+bind(new("TextLabel", {
+Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, FontFace = Tokens.fontRegular,
+TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, Parent = heroBody,
+Text = "Cracks every safe and chest with a lockpick, smashes the jewelry store cases and keeps only pieces worth $2,000 or more. The best ones go straight into the nearest gun locker.",
+}), "TextColor3", "muted")
+new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = 3, Parent = heroBody })
+local startBtn = pressable(new("TextButton", {
+Size = UDim2.new(1, 0, 0, 64), BorderSizePixel = 0, AutoButtonColor = false, FontFace = Tokens.fontStrong, TextSize = 18,
+Text = "Start gem farm", LayoutOrder = 4, Parent = heroBody,
+}, { round(14) }))
+local startHover = false
+local function paintStart()
+tween(startBtn, { BackgroundColor3 = P.accent, BackgroundTransparency = startHover and 0.12 or 0 }, 0.12)
+startBtn.TextColor3 = P.onAccent
+end
+onTheme(paintStart)
+paintStart()
+connect(startBtn.MouseEnter, function() startHover = true paintStart() end)
+connect(startBtn.MouseLeave, function() startHover = false paintStart() end)
+local lastRun = bind(new("TextLabel", {
+Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, FontFace = Tokens.mono, TextSize = 11,
+TextXAlignment = Enum.TextXAlignment.Center, Text = "", Visible = false, LayoutOrder = 5, Parent = heroBody,
+}), "TextColor3", "muted")
+section(gp, "What it keeps")
+note(gp, "Keeps: Dark Matter Gems, Gold Crowns, Void Gems, Diamond Rings, Rollies, Diamonds, Gold Cups, Pearl Necklaces and Diamond Ore. Leaves behind: gold bars, the small gems (ruby, sapphire, amethyst, emerald, topaz), ores, shells, watches and every ring but the Diamond Ring.")
+note(gp, "Your locker holds " .. tostring(LocalPlayer:GetAttribute("lockerSlots") or 4) .. " things. The farm fills free slots with your best pieces and swaps a cheaper gem out when it finds a better one. Guns and anything else you stored yourself keep their slots. Without a lockpick it buys one for $100.")
+local shown = false
+local menuWas, hudWas = true, true
+local function fmtTime(t)
+t = math.floor(t)
+return t >= 3600 and string.format("%d:%02d:%02d", t // 3600, t % 3600 // 60, t % 60) or string.format("%d:%02d", t // 60, t % 60)
+end
+local function showOverlay(visible, restoreMenu)
+if visible == shown then return end
+shown = visible
+if visible then
+menuWas = Holder.Visible
+if UI.setMenuVisible then UI.setMenuVisible(false) end
+if UI.hudGui then hudWas = UI.hudGui.Enabled UI.hudGui.Enabled = false end
+overlay.Enabled = true
+panelScale.Scale = 0.96
+tweenStyle(panelScale, { Scale = 1 }, 0.35)
+else
+overlay.Enabled = false
+if UI.hudGui and UI.hudGui.Parent then UI.hudGui.Enabled = hudWas end
+if restoreMenu and menuWas and UI.setMenuVisible then UI.setMenuVisible(true) end
+lastRun.Visible = true
+lastRun.Text = string.format("Last run: %d kept, $%s, %s", stats.kept, comma(stats.value), fmtTime(os.clock() - stats.started))
+end
+end
+local function setFarm(nowOn)
+if nowOn then
+for _, k in ipairs({ "ohAtm", "ohChestAuto", "ohGemAuto" }) do
+if Settings[k] then
+Settings[k] = false
+if switchRenders[k] then switchRenders[k]() end
+end
+end
+resetStats()
+status = "Starting"
+end
+Settings.ohGemFarm = nowOn
+save()
+showOverlay(nowOn, true)
+end
+connect(startBtn.Activated, function() setFarm(true) end)
+connect(stopBtn.Activated, function() setFarm(false) end)
+Settings.ohGemFarm = false -- never starts by itself on load
+task.spawn(function()
+while hookState.alive do
+if Settings.ohGemFarm ~= shown then showOverlay(Settings.ohGemFarm, false) end
+if shown then
+worthLabel.Text = "$" .. comma(stats.value)
+statusLabel.Text = status
+timeLabel.Text = fmtTime(os.clock() - stats.started)
+keptCell.Text = tostring(stats.kept)
+lockerCell.Text = string.format("%d / %s", stashedCount(), tostring(LocalPlayer:GetAttribute("lockerSlots") or 4))
+safesCell.Text = tostring(stats.safes)
+casesCell.Text = tostring(stats.cases)
+dot.BackgroundTransparency = (math.sin(os.clock() * 4) + 1) * 0.35
+end
+task.wait(0.25)
+end
+overlay:Destroy()
+end)
+end)() end
 local folder = new("Folder", { Name = "VigilOhio", Parent = ROOT })
 local tags = {}
 local function tagFor(key, part, colour)
